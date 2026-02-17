@@ -3,17 +3,26 @@ A股行情监控 V2 - 策略模块
 核心功能：
   1. 综合评分系统（0-100分）→ 买入/观望/远离
   2. 持仓止盈止损检测
+  3. 全市场扫描（两阶段筛选）
 """
 
 import logging
 from dataclasses import dataclass, field
 from typing import Optional
+from datetime import datetime, timedelta
 
 import akshare as ak
 import pandas as pd
 import numpy as np
 
 logger = logging.getLogger(__name__)
+
+
+# ── 历史数据缓存 ──────────────────────────────────────────────
+# 避免重复获取同一只股票的历史数据，减少API调用和流量消耗
+
+_history_cache: dict[str, tuple[pd.DataFrame, datetime]] = {}
+CACHE_DURATION = timedelta(minutes=5)  # 缓存5分钟
 
 
 # ── 告警数据结构 ──────────────────────────────────────────────
@@ -57,8 +66,74 @@ def fetch_realtime_quotes(stock_codes: list[str]) -> Optional[pd.DataFrame]:
         return None
 
 
+def prefilter_full_market(prefilter_config: dict) -> Optional[pd.DataFrame]:
+    """
+    全市场预筛选（阶段1）：只用实时报价数据，不获取历史K线
+    
+    筛选条件：
+    - 涨跌幅绝对值 ≥ min_price_change
+    - 成交量 > 0
+    - 流通市值 ≥ min_market_cap 亿
+    
+    返回符合条件的股票列表（最多 max_results 只）
+    """
+    try:
+        # 获取全市场实时报价（~5000只股票，约100KB）
+        logger.info("开始全市场扫描...")
+        df = ak.stock_zh_a_spot_em()
+        if df is None or df.empty:
+            logger.warning("获取全市场数据为空")
+            return None
+        
+        df["代码"] = df["代码"].astype(str).str.zfill(6)
+        total_count = len(df)
+        logger.info(f"获取全市场{total_count}只股票报价")
+        
+        # 筛选条件
+        min_price_change = prefilter_config.get("min_price_change", 5.0)
+        min_market_cap = prefilter_config.get("min_market_cap", 50)  # 亿
+        max_results = prefilter_config.get("max_results", 100)
+        
+        # 过滤条件
+        df_filtered = df[
+            (df["涨跌幅"].abs() >= min_price_change) &  # 涨跌幅绝对值
+            (df["流通市值"] >= min_market_cap * 1e8) &  # 流通市值（元转亿）
+            (df["成交量"] > 0)                          # 有成交量
+        ].copy()
+        
+        if df_filtered.empty:
+            logger.info("预筛选：无符合条件的股票")
+            return None
+        
+        # 按涨跌幅排序，取绝对值最大的
+        df_filtered["涨跌幅_abs"] = df_filtered["涨跌幅"].abs()
+        df_filtered = df_filtered.sort_values("涨跌幅_abs", ascending=False)
+        df_filtered = df_filtered.head(max_results)
+        
+        logger.info(
+            f"预筛选完成：{total_count} → {len(df_filtered)} 只股票\n"
+            f"  条件：涨跌≥±{min_price_change}%，市值≥{min_market_cap}亿"
+        )
+        
+        return df_filtered
+        
+    except Exception as e:
+        logger.error(f"全市场预筛选失败: {e}")
+        return None
+
+
 def fetch_history(stock_code: str, days: int = 60) -> Optional[pd.DataFrame]:
-    """获取历史K线（用于计算指标）"""
+    """获取历史K线（带缓存，5分钟内不重复获取）"""
+    now = datetime.now()
+    
+    # 检查缓存
+    if stock_code in _history_cache:
+        cached_data, cached_time = _history_cache[stock_code]
+        if now - cached_time < CACHE_DURATION:
+            logger.debug(f"使用缓存: {stock_code}")
+            return cached_data
+    
+    # 获取新数据
     try:
         df = ak.stock_zh_a_hist(
             symbol=stock_code,
@@ -67,7 +142,12 @@ def fetch_history(stock_code: str, days: int = 60) -> Optional[pd.DataFrame]:
         )
         if df is None or df.empty:
             return None
-        return df.tail(days)
+        
+        result = df.tail(days)
+        # 更新缓存
+        _history_cache[stock_code] = (result, now)
+        logger.debug(f"获取并缓存: {stock_code}")
+        return result
     except Exception as e:
         logger.error(f"获取 {stock_code} 历史数据失败: {e}")
         return None
@@ -366,6 +446,7 @@ def generate_signal(row: pd.Series, stock_name: str,
 def run_all_checks(quotes_df: pd.DataFrame, config: dict) -> tuple[list[Alert], dict]:
     """
     执行所有检测，返回 (告警列表, 评分详情)
+    支持全市场模式和关注池模式
     """
     all_alerts = []
     score_details = {}  # {代码: (分数, 理由)}
@@ -373,24 +454,59 @@ def run_all_checks(quotes_df: pd.DataFrame, config: dict) -> tuple[list[Alert], 
     portfolio = config.get("portfolio", {})
     watchlist = config.get("watchlist", {})
     signal_config = config.get("signal", {})
-
-    for _, row in quotes_df.iterrows():
-        code = str(row["代码"]).zfill(6)
-
-        # 1. 持仓止盈止损检测
-        if code in portfolio:
-            all_alerts.extend(check_portfolio(row, portfolio[code]))
-            # 持仓也计算评分（用于展示）
+    full_market = config.get("full_market", {})
+    
+    # 全市场模式：quotes_df 已经是预筛选后的结果
+    if quotes_df is not None and full_market.get("enabled", False):
+        scoring_config = full_market.get("scoring", {})
+        min_score = scoring_config.get("min_score", 70)
+        
+        for _, row in quotes_df.iterrows():
+            code = str(row["代码"]).zfill(6)
+            name = row.get("名称", code)
             price = float(row.get("最新价", 0))
             change_pct = float(row.get("涨跌幅", 0))
+            
+            # 计算评分（阶段2：详细评分）
             score, reason = calculate_score(code, price, change_pct)
             score_details[code] = (score, reason)
+            
+            # 只推送高分股票
+            if score >= min_score:
+                all_alerts.append(Alert(
+                    stock_code=code,
+                    stock_name=name,
+                    alert_type="buy_signal",
+                    level="INFO",
+                    score=score,
+                    price=price,
+                    change_pct=change_pct,
+                    message=(
+                        f"🟢 买入信号 | {name}({code})\n"
+                        f"现价 ¥{price:.2f} | 涨跌 {change_pct:+.2f}% | 评分 {score}/100\n"
+                        f"理由：{reason}"
+                    ),
+                ))
+    
+    # 常规模式：持仓 + 关注池
+    else:
+        for _, row in quotes_df.iterrows():
+            code = str(row["代码"]).zfill(6)
 
-        # 2. 关注池买入/卖出信号
-        if code in watchlist:
-            name = watchlist[code]
-            signals, score, reason = generate_signal(row, name, signal_config)
-            all_alerts.extend(signals)
-            score_details[code] = (score, reason)
+            # 1. 持仓止盈止损检测
+            if code in portfolio:
+                all_alerts.extend(check_portfolio(row, portfolio[code]))
+                # 持仓也计算评分（用于展示）
+                price = float(row.get("最新价", 0))
+                change_pct = float(row.get("涨跌幅", 0))
+                score, reason = calculate_score(code, price, change_pct)
+                score_details[code] = (score, reason)
+
+            # 2. 关注池买入/卖出信号
+            if code in watchlist:
+                name = watchlist[code]
+                signals, score, reason = generate_signal(row, name, signal_config)
+                all_alerts.extend(signals)
+                score_details[code] = (score, reason)
 
     return all_alerts, score_details

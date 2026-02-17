@@ -267,34 +267,26 @@ async def cmd_unwatch(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     code = context.args[0].zfill(6)
-    config = load_user_config(user_id)
+    config = load_config()
 
-    if code not in config.get("watchlist", {}):
+    if "watchlist" not in config or code not in config["watchlist"]:
         await update.message.reply_text(f"❌ 未找到关注股票: {code}")
         return
 
     name = config["watchlist"][code]
     del config["watchlist"][code]
-    save_user_config(user_id, config)
+    save_config(config)
 
     await update.message.reply_text(f"✅ 已删除关注: *{name}({code})*", parse_mode="Markdown")
 
 
 async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """查看监控状态"""
-    user_id = update.effective_user.id
-    
-    # 读取用户的持仓和关注池数量
-    config = load_user_config(user_id)
+    config = load_config()
     portfolio_count = len(config.get("portfolio", {}))
     watchlist_count = len(config.get("watchlist", {}))
-    
-    # 统计总用户数
-    total_users = len(get_all_users())
-    
-    # 读取全局配置获取通知渠道
-    global_config = load_config()
-    notif = global_config.get("notification", {})
+
+    notif = config.get("notification", {})
     channels = []
     if notif.get("telegram", {}).get("enabled"):
         channels.append("Telegram")

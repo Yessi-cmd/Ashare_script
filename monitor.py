@@ -24,8 +24,9 @@ from datetime import datetime
 import yaml
 
 from holidays import is_trading_day, is_holiday, is_weekend, get_holiday_name, get_next_trading_day
-from strategies import fetch_realtime_quotes, run_all_checks
+from strategies import fetch_realtime_quotes, run_all_checks, prefilter_full_market
 from notifier import format_alerts, send_notification
+from user_config import get_all_portfolios, get_all_watchlists, get_all_users
 
 # ── 全局 ──────────────────────────────────────────────────────
 
@@ -192,23 +193,51 @@ def print_dashboard(quotes_df, config: dict, score_details: dict):
 
 def monitor_loop(config: dict, test_mode: bool = False, once: bool = False):
     """主监控循环"""
-    portfolio = config.get("portfolio", {})
-    watchlist = config.get("watchlist", {})
-    all_codes = list(set(list(portfolio.keys()) + list(watchlist.keys())))
+    # 从数据库读取所有用户的持仓和关注池
+    portfolios_by_user = get_all_portfolios()  # {user_id: {code: {...}}}
+    watchlists_by_user = get_all_watchlists()  # {user_id: {code: name}}
+    
+    # 合并所有用户的持仓和关注池
+    portfolio = {}
+    for user_id, user_portfolio in portfolios_by_user.items():
+        portfolio.update(user_portfolio)
+    
+    watchlist = {}
+    for user_id, user_watchlist in watchlists_by_user.items():
+        watchlist.update(user_watchlist)
+    
+    total_users = len(get_all_users())
+    logger.info(f"📊 监控 {total_users} 个用户的股票池")
+    
+    full_market = config.get("full_market", {})
+    full_market_enabled = full_market.get("enabled", False)
+    
+    # 全市场模式 vs 关注池模式
+    if full_market_enabled:
+        logger.info("🌐 全市场扫描模式已启用")
+        prefilter_cfg = full_market.get("prefilter", {})
+        logger.info(f"  阶段1筛选: 涨跌≥±{prefilter_cfg.get('min_price_change', 5)}%, "
+                   f"市值≥{prefilter_cfg.get('min_market_cap', 50)}亿")
+        logger.info(f"  阶段2评分: 最多保留{prefilter_cfg.get('max_results', 100)}只股票")
+        scoring_cfg = full_market.get("scoring", {})
+        logger.info(f"  买入信号: 评分≥{scoring_cfg.get('min_score', 70)}")
+        all_codes = []  # 全市场模式不需要预定义股票池
+    else:
+        all_codes = list(set(list(portfolio.keys()) + list(watchlist.keys())))
+        if not all_codes:
+            logger.error("股票池为空！请在 config.yaml 中配置 portfolio / watch list 或启用 full_market")
+            sys.exit(1)
+        
+        # 显示监控信息
+        logger.info(f"持仓股票: {len(portfolio)} 只")
+        for code, info in portfolio.items():
+            logger.info(f"  {info.get('name', code)}({code}) "
+                       f"买入价 ¥{info.get('buy_price', 0):.2f} × {info.get('shares', 0)}股 "
+                       f"止损 {info.get('stop_loss', -5)}% / 止盈 {info.get('take_profit', 10)}%")
+        
+        logger.info(f"关注股票: {len(watchlist)} 只")
+    
     interval = config.get("monitor", {}).get("interval_seconds", 30)
-
-    if not all_codes:
-        logger.error("股票池为空！请在 config.yaml 中配置 portfolio 或 watchlist")
-        sys.exit(1)
-
-    # 显示监控信息
-    logger.info(f"持仓股票: {len(portfolio)} 只")
-    for code, info in portfolio.items():
-        logger.info(f"  {info.get('name', code)}({code}) "
-                    f"买入价 ¥{info.get('buy_price', 0):.2f} × {info.get('shares', 0)}股 "
-                    f"止损 {info.get('stop_loss', -5)}% / 止盈 {info.get('take_profit', 10)}%")
-
-    logger.info(f"关注股票: {len(watchlist)} 只")
     logger.info(f"轮询间隔: {interval} 秒")
 
     # 告警去重
@@ -225,8 +254,21 @@ def monitor_loop(config: dict, test_mode: bool = False, once: bool = False):
                 continue
 
             # 获取行情
-            logger.info("正在获取实时行情...")
-            quotes = fetch_realtime_quotes(all_codes)
+            if full_market_enabled:
+                # 全市场模式：先预筛选
+                logger.info("正在执行全市场预筛选...")
+                quotes = prefilter_full_market(full_market.get("prefilter", {}))
+                if quotes is None or quotes.empty:
+                    logger.info("预筛选无结果，等待下一轮...")
+                    if test_mode or once:
+                        logger.info("✅ 测试完成（无符合条件的股票）")
+                        break
+                    time.sleep(interval)
+                    continue
+            else:
+                # 关注池模式
+                logger.info("正在获取实时行情...")
+                quotes = fetch_realtime_quotes(all_codes)
 
             if quotes is None or quotes.empty:
                 logger.warning("获取行情失败，等待重试...")

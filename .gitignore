@@ -22,6 +22,11 @@ build/
 # 配置文件（含敏感信息）
 config.yaml
 
+# 数据库文件
+*.db
+*.db-journal
+users/
+
 # 日志
 *.log
 

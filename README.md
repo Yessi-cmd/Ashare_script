@@ -13,9 +13,17 @@
 - **评分理由解释**："处于超卖区域，有反弹可能"
 
 ### 💼 持仓管理
+- **多用户支持**：每个用户独立持仓，数据隔离
+- **SQLite 数据库存储**：可靠、高效、并发安全
 - **止盈止损自动提醒**：设定百分比阈值，触发时推送通知
 - **实时盈亏追踪**：持仓总盈亏、单只股票盈亏实时展示
 - **Telegram Bot 交互管理**：命令行添加/删除持仓，无需改配置文件
+
+### 📰 新闻资讯
+- **早间简报**：隔夜外盘 + 财经快讯
+- **晚间总结**：A股收盘 + 涨跌停统计 + 资金流向
+- **即时快讯**：实时财经新闻推送
+- **RSS 智能降级**：API 超时自动切换 RSS 源
 
 ### 📅 智能调度
 - **内置 A股节假日日历**：自动跳过春节、国庆等休市日期
@@ -112,16 +120,22 @@ python bot.py &
 
 ```
 Ashare_script/
-├── monitor.py           # 主监控程序
+├── main.py             # 主入口（一键启动所有服务）
+├── monitor.py          # 主监控程序
 ├── bot.py              # Telegram Bot 交互管理
+├── database.py         # SQLAlchemy ORM 模型
+├── user_config.py      # 用户配置数据库访问层
 ├── strategies.py       # 评分系统 + 止盈止损
 ├── notifier.py         # 通知模块
+├── news.py             # 新闻资讯模块
 ├── holidays.py         # A股节假日日历
-├── config.yaml         # 配置文件（不提交到 Git）
+├── config.yaml         # 全局配置文件（不提交到 Git）
 ├── config.yaml.example # 配置模板
 ├── requirements.txt    # Python 依赖
+├── ashare_monitor.db   # SQLite 数据库（不提交到 Git）
 └── deploy/
     ├── ashare_monitor.service  # systemd 服务文件
+    ├── ashare_bot.service      # Bot 服务文件
     └── README_deploy.md        # 部署指南
 ```
 

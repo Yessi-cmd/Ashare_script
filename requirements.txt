@@ -3,3 +3,5 @@ pyyaml>=6.0
 requests>=2.28.0
 schedule>=1.2.0
 python-telegram-bot>=21.0
+feedparser>=6.0.10
+sqlalchemy>=2.0.0
