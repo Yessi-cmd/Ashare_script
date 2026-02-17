@@ -1,0 +1,19 @@
+[Unit]
+Description=A股行情监控服务
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/ashare_monitor
+ExecStart=/opt/ashare_monitor/venv/bin/python monitor.py
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+Environment=PYTHONUNBUFFERED=1
+# 时区设为上海（确保交易时段判断正确）
+Environment=TZ=Asia/Shanghai
+
+[Install]
+WantedBy=multi-user.target

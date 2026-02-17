@@ -1,0 +1,73 @@
+# ============================================================
+# A股行情监控 V2 - 配置模板
+# 使用说明: 复制此文件为 config.yaml，然后填入你的信息
+# ============================================================
+
+# ------ 我的持仓 ------
+# 填入你持有的股票，用于止盈止损监控
+portfolio:
+  "600519":
+    name: "贵州茅台"
+    buy_price: 1500.00      # 你的买入均价
+    shares: 100             # 持有股数
+    stop_loss: -5.0         # 亏损 5% 提醒卖出（负数）
+    take_profit: 10.0       # 盈利 10% 提醒止盈（正数）
+  # 添加更多持仓...
+  # "000858":
+  #   name: "五粮液"
+  #   buy_price: 105.00
+  #   shares: 500
+  #   stop_loss: -5.0
+  #   take_profit: 15.0
+
+# ------ 关注池 ------
+# 没有持仓，但想监控的股票（会给出买入评分）
+watchlist:
+  "300750": "宁德时代"
+  "002594": "比亚迪"
+  "601318": "中国平安"
+  # 添加更多关注股票...
+
+# ------ 监控频率 ------
+monitor:
+  interval_seconds: 30      # 轮询间隔(秒)，建议 30-60
+  trading_hours:
+    morning_start: "09:15"
+    morning_end: "11:30"
+    afternoon_start: "13:00"
+    afternoon_end: "15:00"
+
+# ------ 买入信号灵敏度 ------
+signal:
+  buy_threshold: 70          # ≥70分 推送买入信号（越低越灵敏）
+  sell_threshold: 30         # ≤30分 推送远离信号
+
+# ------ 通知渠道 ------
+# 至少启用一个渠道，不需要的 enabled 设为 false
+
+notification:
+  # Telegram Bot (推荐)
+  telegram:
+    enabled: false           # 改为 true 启用
+    bot_token: "YOUR_BOT_TOKEN"        # 从 @BotFather 获取
+    chat_id: "YOUR_CHAT_ID"            # 你的 Chat ID
+
+  # 钉钉机器人
+  dingtalk:
+    enabled: false
+    webhook_url: "https://oapi.dingtalk.com/robot/send?access_token=YOUR_TOKEN"
+    secret: ""               # 加签密钥（可选）
+
+  # 邮件 SMTP
+  email:
+    enabled: false
+    smtp_server: "smtp.gmail.com"
+    smtp_port: 587
+    username: "your_email@gmail.com"
+    password: "your_app_password"     # Gmail 应用专用密码
+    to_address: "recipient@example.com"
+
+# ------ 日志 ------
+logging:
+  level: "INFO"              # DEBUG / INFO / WARNING / ERROR
+  file: "monitor.log"
