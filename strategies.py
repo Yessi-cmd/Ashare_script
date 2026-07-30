@@ -7,13 +7,15 @@ A股行情监控 V2 - 策略模块
 """
 
 import logging
+from datetime import datetime, timedelta
 from dataclasses import dataclass, field
 from typing import Optional
-from datetime import datetime, timedelta
 
 import akshare as ak
 import pandas as pd
-import numpy as np
+import requests
+
+from market_data import load_daily_bars
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +25,9 @@ logger = logging.getLogger(__name__)
 
 _history_cache: dict[str, tuple[pd.DataFrame, datetime]] = {}
 CACHE_DURATION = timedelta(minutes=5)  # 缓存5分钟
+
+TENCENT_QUOTE_URL = "https://qt.gtimg.cn/q={symbols}"
+QUOTE_TIMEOUT_SECONDS = 5
 
 
 # ── 告警数据结构 ──────────────────────────────────────────────
@@ -43,26 +48,110 @@ class Alert:
 
 # ── 实时行情获取 ──────────────────────────────────────────────
 
+def _tencent_market_symbol(stock_code: str) -> str:
+    """Convert a six-digit A-share code to Tencent's exchange-prefixed symbol."""
+    if stock_code.startswith(("5", "6", "9")):
+        return f"sh{stock_code}"
+    if stock_code.startswith(("4", "8")):
+        return f"bj{stock_code}"
+    return f"sz{stock_code}"
+
+
+def _fetch_tencent_quotes(stock_codes: list[str]) -> Optional[pd.DataFrame]:
+    """Fetch only the requested symbols when the full-market source is unavailable."""
+    requested_codes = sorted({str(code).zfill(6) for code in stock_codes})
+    if not requested_codes:
+        return None
+
+    symbols = ",".join(_tencent_market_symbol(code) for code in requested_codes)
+    try:
+        response = requests.get(
+            TENCENT_QUOTE_URL.format(symbols=symbols),
+            headers={
+                "Referer": "https://gu.qq.com/",
+                "User-Agent": "Mozilla/5.0 AShareMonitor/2",
+            },
+            timeout=QUOTE_TIMEOUT_SECONDS,
+        )
+        response.raise_for_status()
+        text = response.content.decode("gb18030", errors="replace")
+    except Exception as exc:
+        logger.warning(f"腾讯目标行情获取失败: {exc}")
+        return None
+
+    requested_set = set(requested_codes)
+    rows = []
+    for raw_record in text.split(";"):
+        _, separator, payload = raw_record.partition('="')
+        if not separator:
+            continue
+        fields = payload.rstrip().rstrip('"').split("~")
+        if len(fields) < 7:
+            continue
+
+        code = str(fields[2]).zfill(6)
+        if code not in requested_set:
+            continue
+        try:
+            current_price = float(fields[3])
+            previous_close = float(fields[4])
+        except (TypeError, ValueError):
+            continue
+        if current_price <= 0 or previous_close <= 0:
+            continue
+
+        try:
+            volume = float(fields[6])
+        except (TypeError, ValueError):
+            volume = None
+        rows.append({
+            "代码": code,
+            "名称": fields[1] or code,
+            "最新价": current_price,
+            "涨跌幅": (current_price - previous_close) / previous_close * 100,
+            "成交量": volume,
+        })
+
+    if not rows:
+        logger.warning(f"腾讯目标行情未返回有效股票: {requested_codes}")
+        return None
+
+    target = pd.DataFrame(rows).drop_duplicates(subset=["代码"], keep="last")
+    logger.info(f"腾讯目标源成功获取 {len(target)} 只股票行情")
+    return target
+
 def fetch_realtime_quotes(stock_codes: list[str]) -> Optional[pd.DataFrame]:
     """获取实时行情"""
+    normalized_codes = sorted({str(code).zfill(6) for code in stock_codes})
+    target = _fetch_tencent_quotes(normalized_codes)
+    if target is not None and not target.empty:
+        return target
+
+    logger.warning("腾讯目标行情失败，切换东方财富全市场行情")
     try:
         df = ak.stock_zh_a_spot_em()
         if df is None or df.empty:
-            logger.warning("获取实时行情数据为空")
-            return None
+            raise ValueError("东方财富实时行情数据为空")
+
+        required_columns = {"代码", "最新价", "涨跌幅"}
+        missing = required_columns - set(df.columns)
+        if missing:
+            raise ValueError(f"东方财富实时行情缺少字段: {', '.join(sorted(missing))}")
 
         df["代码"] = df["代码"].astype(str).str.zfill(6)
-        target = df[df["代码"].isin(stock_codes)].copy()
+        df["最新价"] = pd.to_numeric(df["最新价"], errors="coerce")
+        df["涨跌幅"] = pd.to_numeric(df["涨跌幅"], errors="coerce")
+        target = df[df["代码"].isin(normalized_codes)].copy()
+        target = target.dropna(subset=["最新价", "涨跌幅"])
 
         if target.empty:
-            logger.warning(f"未找到目标股票: {stock_codes}")
-            return None
+            raise ValueError(f"东方财富未找到目标股票: {normalized_codes}")
 
-        logger.info(f"成功获取 {len(target)} 只股票行情")
+        logger.info(f"东方财富成功获取 {len(target)} 只股票行情")
         return target
 
-    except Exception as e:
-        logger.error(f"获取实时行情失败: {e}")
+    except Exception as exc:
+        logger.error(f"东方财富实时行情失败: {exc}")
         return None
 
 
@@ -84,6 +173,12 @@ def prefilter_full_market(prefilter_config: dict) -> Optional[pd.DataFrame]:
         if df is None or df.empty:
             logger.warning("获取全市场数据为空")
             return None
+
+        required_columns = {"代码", "涨跌幅", "流通市值", "成交量"}
+        missing = required_columns - set(df.columns)
+        if missing:
+            logger.error(f"全市场行情缺少字段: {', '.join(sorted(missing))}")
+            return None
         
         df["代码"] = df["代码"].astype(str).str.zfill(6)
         total_count = len(df)
@@ -92,7 +187,11 @@ def prefilter_full_market(prefilter_config: dict) -> Optional[pd.DataFrame]:
         # 筛选条件
         min_price_change = prefilter_config.get("min_price_change", 5.0)
         min_market_cap = prefilter_config.get("min_market_cap", 50)  # 亿
+        min_volume_ratio = prefilter_config.get("min_volume_ratio", 0)
         max_results = prefilter_config.get("max_results", 100)
+
+        for column in ("涨跌幅", "流通市值", "成交量"):
+            df[column] = pd.to_numeric(df[column], errors="coerce")
         
         # 过滤条件
         df_filtered = df[
@@ -100,6 +199,12 @@ def prefilter_full_market(prefilter_config: dict) -> Optional[pd.DataFrame]:
             (df["流通市值"] >= min_market_cap * 1e8) &  # 流通市值（元转亿）
             (df["成交量"] > 0)                          # 有成交量
         ].copy()
+        if min_volume_ratio > 0:
+            if "量比" not in df_filtered.columns:
+                logger.warning("行情数据缺少“量比”字段，已跳过量比筛选")
+            else:
+                volume_ratio = pd.to_numeric(df_filtered["量比"], errors="coerce")
+                df_filtered = df_filtered[volume_ratio >= min_volume_ratio]
         
         if df_filtered.empty:
             logger.info("预筛选：无符合条件的股票")
@@ -123,7 +228,7 @@ def prefilter_full_market(prefilter_config: dict) -> Optional[pd.DataFrame]:
 
 
 def fetch_history(stock_code: str, days: int = 60) -> Optional[pd.DataFrame]:
-    """获取历史K线（带缓存，5分钟内不重复获取）"""
+    """Load local daily bars first, then use a bounded network fallback."""
     now = datetime.now()
     
     # 检查缓存
@@ -133,24 +238,48 @@ def fetch_history(stock_code: str, days: int = 60) -> Optional[pd.DataFrame]:
             logger.debug(f"使用缓存: {stock_code}")
             return cached_data
     
-    # 获取新数据
+    local_result = None
+    try:
+        local_bars = load_daily_bars(stock_code, adjust="qfq")
+        if local_bars is not None and not local_bars.empty:
+            local_result = (
+                local_bars.rename(columns={"close": "收盘", "volume": "成交量"})
+                .tail(days)
+                .copy()
+            )
+            if len(local_result) >= 20:
+                _history_cache[stock_code] = (local_result, now)
+                logger.debug(f"使用本地日线: {stock_code}")
+                return local_result
+            logger.warning(f"{stock_code} 本地日线不足 20 条，尝试网络补齐")
+    except Exception as exc:
+        logger.warning(f"读取 {stock_code} 本地日线失败，尝试网络补齐: {exc}")
+
+    # 本地数据不足时才获取新数据
     try:
         df = ak.stock_zh_a_hist(
             symbol=stock_code,
             period="daily",
-            adjust="qfq"
+            adjust="qfq",
+            timeout=10,
         )
         if df is None or df.empty:
-            return None
+            return local_result
+
+        required_columns = {"收盘", "成交量"}
+        missing = required_columns - set(df.columns)
+        if missing:
+            logger.error(f"{stock_code} 历史行情缺少字段: {', '.join(sorted(missing))}")
+            return local_result
         
         result = df.tail(days)
         # 更新缓存
         _history_cache[stock_code] = (result, now)
         logger.debug(f"获取并缓存: {stock_code}")
         return result
-    except Exception as e:
-        logger.error(f"获取 {stock_code} 历史数据失败: {e}")
-        return None
+    except Exception as exc:
+        logger.error(f"获取 {stock_code} 历史数据失败: {exc}")
+        return local_result
 
 
 # ── 技术指标计算（内部使用，不暴露给用户）────────────────────
@@ -162,7 +291,13 @@ def _calc_rsi(closes: pd.Series, period: int = 14) -> float:
     loss = -delta.where(delta < 0, 0.0)
     avg_gain = gain.rolling(window=period).mean()
     avg_loss = loss.rolling(window=period).mean()
-    rs = avg_gain / avg_loss.replace(0, np.nan)
+    latest_gain = avg_gain.iloc[-1]
+    latest_loss = avg_loss.iloc[-1]
+    if pd.isna(latest_gain) or pd.isna(latest_loss):
+        return 50.0
+    if latest_loss == 0:
+        return 100.0 if latest_gain > 0 else 50.0
+    rs = avg_gain / avg_loss
     rsi = 100 - (100 / (1 + rs))
     val = rsi.iloc[-1]
     return float(val) if not pd.isna(val) else 50.0
@@ -228,20 +363,30 @@ def _calc_volume_trend(volumes: pd.Series) -> dict:
 
 def calculate_score(stock_code: str, current_price: float,
                     change_pct: float) -> tuple[int, str]:
+    """Fetch recent bars and calculate the current technical score."""
+    hist = fetch_history(stock_code, days=60)
+    return calculate_score_from_history(hist, current_price, change_pct)
+
+
+def calculate_score_from_history(hist: Optional[pd.DataFrame], current_price: float,
+                                 change_pct: float) -> tuple[int, str]:
     """
-    综合评分：根据多个技术指标计算 0-100 分。
+    使用调用方提供的历史窗口计算 0-100 分，不访问外部行情。
+
     ≥ 70 = 买入信号
     40-69 = 观望
     < 40 = 远离/卖出
 
     返回 (分数, 白话文解释)
     """
-    hist = fetch_history(stock_code, days=60)
     if hist is None or len(hist) < 20:
         return 50, "数据不足，暂时无法评估"
 
-    closes = hist["收盘"].astype(float)
-    volumes = hist["成交量"].astype(float)
+    numeric = hist[["收盘", "成交量"]].apply(pd.to_numeric, errors="coerce").dropna()
+    if len(numeric) < 20:
+        return 50, "有效历史数据不足，暂时无法评估"
+    closes = numeric["收盘"]
+    volumes = numeric["成交量"]
 
     score = 50  # 基础分
     reasons = []
@@ -395,7 +540,7 @@ def check_portfolio(row: pd.Series, portfolio_item: dict) -> list[Alert]:
 # ── 生成买入/卖出信号 ─────────────────────────────────────────
 
 def generate_signal(row: pd.Series, stock_name: str,
-                    signal_config: dict) -> list[Alert]:
+                    signal_config: dict) -> tuple[list[Alert], int, str]:
     """为关注池股票生成买入/卖出信号"""
     alerts = []
 

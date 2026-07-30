@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="icon" href="data:,">
+  <title>{{ title }} · 个人研究台</title>
+  <link rel="stylesheet" href="{{ url_for('static', path='/app.css') }}">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/">个人研究台</a>
+    <nav>
+      <a href="/">今日</a>
+      <a href="/markets">全球市场</a>
+      <a href="/recommendations">荐股研究</a>
+      <a href="/screener">自助选股</a>
+      <a href="/system">系统</a>
+      <form action="/logout" method="post"><button class="nav-button" type="submit">退出</button></form>
+    </nav>
+  </header>
+  <main>{% block content %}{% endblock %}</main>
+  <footer>只读研究界面 · 不构成投资建议</footer>
+</body>
+</html>

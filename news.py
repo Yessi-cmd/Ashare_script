@@ -7,12 +7,19 @@ import logging
 from datetime import datetime
 from typing import Optional, List, Dict, Callable, Any
 import threading
+from zoneinfo import ZoneInfo
 
 import akshare as ak
-import pandas as pd
 import feedparser
+import requests
 
 logger = logging.getLogger(__name__)
+_API_SLOTS = threading.BoundedSemaphore(value=4)
+SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
+
+
+def _now() -> datetime:
+    return datetime.now(SHANGHAI_TZ)
 
 
 # ── API 超时保护 ───────────────────────────────────────────
@@ -22,6 +29,10 @@ def call_with_timeout(func: Callable, timeout: int = 5, *args, **kwargs) -> Opti
     带超时保护的函数调用
     timeout: 超时时间（秒），默认5秒
     """
+    if not _API_SLOTS.acquire(blocking=False):
+        logger.warning("新闻 API 工作线程已满，跳过本次请求")
+        return None
+
     result = [None]
     exception = [None]
     
@@ -30,6 +41,8 @@ def call_with_timeout(func: Callable, timeout: int = 5, *args, **kwargs) -> Opti
             result[0] = func(*args, **kwargs)
         except Exception as e:
             exception[0] = e
+        finally:
+            _API_SLOTS.release()
     
     thread = threading.Thread(target=target)
     thread.daemon = True
@@ -62,7 +75,13 @@ def fetch_rss_news(feed_url: str, max_items: int = 5) -> List[Dict[str, str]]:
     返回: [{"title": "...", "link": "...", "published": "..."}, ...]
     """
     try:
-        feed = feedparser.parse(feed_url)
+        response = requests.get(
+            feed_url,
+            timeout=5,
+            headers={"User-Agent": "AshareMonitor/2.0"},
+        )
+        response.raise_for_status()
+        feed = feedparser.parse(response.content)
         news_list = []
         
         for entry in feed.entries[:max_items]:
@@ -83,7 +102,7 @@ def get_rss_news_summary() -> str:
     news_items = []
     news_items.append("📰 实时财经资讯")
     news_items.append("=" * 40)
-    news_items.append(f"🕐 {datetime.now().strftime('%Y-%m-%d %H:%M')}\n")
+    news_items.append(f"🕐 {_now().strftime('%Y-%m-%d %H:%M')}\n")
     
     total_news = 0
     for source_name, feed_url in RSS_FEEDS.items():
@@ -108,6 +127,47 @@ def get_rss_news_summary() -> str:
     return "\n".join(news_items)
 
 
+def _format_us_indices(df) -> tuple[list[str], bool]:
+    """Format index rows using each row's own change/pre-close data."""
+    fallback_names = ["道琼斯指数", "纳斯达克", "标普500"]
+    lines = []
+    has_change_data = False
+    for i, (_idx, row) in enumerate(df.head(3).iterrows()):
+        name = row.get("name") or row.get("名称") or (
+            fallback_names[i] if i < len(fallback_names) else "未知指数"
+        )
+        close = row.get("close", row.get("price", row.get("最新价", 0)))
+        try:
+            close = float(close)
+        except (TypeError, ValueError):
+            close = 0.0
+
+        raw_pct = row.get("change_percent", row.get("涨跌幅"))
+        try:
+            change_pct = float(raw_pct) if raw_pct is not None else None
+        except (TypeError, ValueError):
+            change_pct = None
+
+        if change_pct is None:
+            previous = row.get("preclose", row.get("昨收"))
+            try:
+                previous = float(previous)
+            except (TypeError, ValueError):
+                previous = 0.0
+            if previous > 0:
+                change_pct = (close - previous) / previous * 100
+
+        if close <= 0:
+            continue
+        if change_pct is None:
+            lines.append(f"⚪ {name}: {close:.2f}（涨跌幅暂无）")
+        else:
+            has_change_data = True
+            emoji = "🔴" if change_pct > 0 else "🟢"
+            lines.append(f"{emoji} {name}: {close:.2f} ({change_pct:+.2f}%)")
+    return lines, has_change_data
+
+
 def get_morning_news() -> str:
     """
     早间新闻（8:00）
@@ -117,7 +177,7 @@ def get_morning_news() -> str:
     news_items = []
     news_items.append("📰 早间财经简报")
     news_items.append("=" * 40)
-    news_items.append(f"🕐 {datetime.now().strftime('%Y-%m-%d %H:%M')}\n")
+    news_items.append(f"🕐 {_now().strftime('%Y-%m-%d %H:%M')}\n")
     
     has_content = False
     
@@ -127,7 +187,7 @@ def get_morning_news() -> str:
     if df_news is not None and not df_news.empty:
         news_items.append("📌 最新快讯")
         news_items.append("-" * 40)
-        now = datetime.now()
+        now = _now()
         shown_count = 0
         for idx, row in df_news.head(10).iterrows():
             title = row.get("新闻标题", "")
@@ -135,11 +195,13 @@ def get_morning_news() -> str:
             
             # 日期检测（如果新闻超过3天标注）
             try:
-                news_time = datetime.strptime(time_str, "%Y-%m-%d %H:%M:%S")
+                news_time = datetime.strptime(time_str, "%Y-%m-%d %H:%M:%S").replace(
+                    tzinfo=SHANGHAI_TZ
+                )
                 days_old = (now - news_time).days
                 if days_old > 3:
                     title = f"{title} ⏰历史({days_old}天前)"
-            except:
+            except (TypeError, ValueError):
                 pass
             
             if len(title) > 60:
@@ -155,27 +217,7 @@ def get_morning_news() -> str:
     logger.info("获取美股指数...")
     df_us = call_with_timeout(ak.index_us_stock_sina, timeout=5)
     if df_us is not None and not df_us.empty:
-        # API不返回名称，硬编码三大指数名称
-        us_names = ["道琼斯指数", "纳斯达克", "标普500"]
-        
-        # 检查数据是否有效（避免全0数据）
-        valid_data = False
-        us_indices = []
-        for i, (idx, row) in enumerate(df_us.head(3).iterrows()):
-            name = us_names[i] if i < len(us_names) else "未知指数"
-            close = row.get("close", 0)
-            # 计算涨跌幅（如果有昨日数据）
-            chg_pct = 0.0
-            if i > 0 and i < len(df_us):
-                prev_close = df_us.iloc[i-1].get("close", close)
-                if prev_close > 0:
-                    chg_pct = (close - prev_close) / prev_close * 100
-            
-            if abs(chg_pct) > 0.01:  # 涨跌幅至少0.01%才算有效
-                valid_data = True
-            
-            emoji = "🔴" if chg_pct > 0 else "🟢"  # 红涨绿跌
-            us_indices.append(f"{emoji} {name}: {close:.2f} ({chg_pct:+.2f}%)")
+        us_indices, valid_data = _format_us_indices(df_us)
         
         if us_indices:  # 只要有数据就显示
             news_items.append("🌍 隔夜外盘")
@@ -217,7 +259,7 @@ def get_evening_news() -> str:
     news_items = []
     news_items.append("📊 晚间市场总结")
     news_items.append("=" * 40)
-    news_items.append(f"🕐 {datetime.now().strftime('%Y-%m-%d %H:%M')}\n")
+    news_items.append(f"🕐 {_now().strftime('%Y-%m-%d %H:%M')}\n")
     
     has_content = False
     
@@ -244,7 +286,7 @@ def get_evening_news() -> str:
     # 2. 涨跌停统计（带超时 + 错误处理）
     try:
         logger.info("获取涨跌停数据...")
-        today = datetime.now().strftime('%Y%m%d')
+        today = _now().strftime('%Y%m%d')
         df_limit = call_with_timeout(ak.stock_zt_pool_em, timeout=5, date=today)
         df_dt = call_with_timeout(ak.stock_dt_pool_em, timeout=5, date=today)
         
@@ -321,12 +363,12 @@ def get_instant_news() -> str:
     news_items = []
     news_items.append("⚡ 即时财经快讯")
     news_items.append("=" * 40)
-    news_items.append(f"🕐 {datetime.now().strftime('%Y-%m-%d %H:%M')}\n")
+    news_items.append(f"🕐 {_now().strftime('%Y-%m-%d %H:%M')}\n")
     
     try:
         # 1. 东方财富快讯（最新10条）
         logger.info("获取东方财富快讯...")
-        df_news = ak.stock_news_em()
+        df_news = call_with_timeout(ak.stock_news_em, timeout=5)
         if df_news is not None and not df_news.empty:
             news_items.append("📢 最新快讯")
             news_items.append("-" * 40)
@@ -340,17 +382,19 @@ def get_instant_news() -> str:
         
         # 2. 当前市场状态
         logger.info("获取市场状态...")
-        now = datetime.now()
+        now = _now()
         hour = now.hour
         if 9 <= hour < 15:
             # 交易时段，显示实时指数
-            df_index = ak.stock_zh_index_spot_em()
+            df_index = call_with_timeout(ak.stock_zh_index_spot_em, timeout=5)
             if df_index is not None and not df_index.empty:
-                sh = df_index[df_index["代码"] == "000001"].iloc[0]
-                news_items.append("\n📊 上证指数")
-                news_items.append(
-                    f"  {sh['最新价']:.2f} ({sh['涨跌幅']:+.2f}%)"
-                )
+                sh_rows = df_index[df_index["代码"] == "000001"]
+                if not sh_rows.empty:
+                    sh = sh_rows.iloc[0]
+                    news_items.append("\n📊 上证指数")
+                    news_items.append(
+                        f"  {sh['最新价']:.2f} ({sh['涨跌幅']:+.2f}%)"
+                    )
         else:
             news_items.append("\n💤 市场已休市")
         

@@ -59,12 +59,19 @@ HOLIDAYS_2026 = {
     date(2026, 10, 7),
 }
 
+HOLIDAYS_BY_YEAR = {2026: HOLIDAYS_2026}
+
+
+def is_calendar_supported(year: int) -> bool:
+    """Return whether an official exchange holiday calendar is configured."""
+    return year in HOLIDAYS_BY_YEAR
+
 
 def is_holiday(d: date = None) -> bool:
     """判断给定日期是否为休市日（节假日）"""
     if d is None:
         d = date.today()
-    return d in HOLIDAYS_2026
+    return d in HOLIDAYS_BY_YEAR.get(d.year, set())
 
 
 def is_weekend(d: date = None) -> bool:
@@ -78,6 +85,9 @@ def is_trading_day(d: date = None) -> bool:
     """判断给定日期是否为交易日"""
     if d is None:
         d = date.today()
+    # 未配置年份时安全地视为非交易日，避免法定节假日误发提醒。
+    if not is_calendar_supported(d.year):
+        return False
     return not is_weekend(d) and not is_holiday(d)
 
 
@@ -86,8 +96,12 @@ def get_next_trading_day(d: date = None) -> date:
     if d is None:
         d = date.today()
     next_day = d + timedelta(days=1)
+    if not is_calendar_supported(next_day.year):
+        raise ValueError(f"尚未配置 {next_day.year} 年 A 股交易日历")
     while not is_trading_day(next_day):
         next_day += timedelta(days=1)
+        if not is_calendar_supported(next_day.year):
+            raise ValueError(f"尚未配置 {next_day.year} 年 A 股交易日历")
     return next_day
 
 

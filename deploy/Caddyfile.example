@@ -1,0 +1,12 @@
+# 把域名替换为自己的域名，并先完成 DNS/Cloudflare Access 配置。
+stocks.example.com {
+    encode zstd gzip
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "DENY"
+        Referrer-Policy "same-origin"
+        -Server
+    }
+    reverse_proxy 127.0.0.1:8000
+}

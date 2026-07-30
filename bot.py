@@ -14,13 +14,12 @@ A股行情监控 - Telegram Bot 持仓管理
   /status       - 查看监控状态
 """
 
+import asyncio
 import logging
-import os
 import sys
-from typing import Optional
+from functools import wraps
 
-import yaml
-from telegram import Update, BotCommand
+from telegram import Update
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
@@ -31,7 +30,8 @@ from telegram.ext import (
 from news import get_morning_news, get_evening_news, get_instant_news
 
 # 导入用户配置模块
-from user_config import load_user_config, save_user_config, get_all_users
+from settings import ConfigError, get_owner_user_id, load_config
+from user_config import load_user_config, save_user_config
 
 # ── 日志 ──────────────────────────────────────────────────────
 
@@ -43,40 +43,35 @@ logger = logging.getLogger(__name__)
 
 # ── 权限控制 ──────────────────────────────────────────────────
 
-# 允许使用 Bot 的 Telegram User ID 白名单
-# 获取你的 User ID: 向 @userinfobot 发送消息，它会告诉你
-ALLOWED_USERS = [
-    # 465948141,  # 示例：替换为你的 Telegram User ID
-]
+# 个人模式只允许配置的 owner 使用。
+OWNER_USER_ID = None
 
 def check_permission(user_id: int) -> bool:
     """检查用户是否有权限"""
-    # 如果白名单为空，允许所有人（方便调试）
-    if not ALLOWED_USERS:
-        logger.warning("⚠️  白名单为空，任何人都可以使用 Bot！请在 bot.py 中配置 ALLOWED_USERS")
-        return True
-    return user_id in ALLOWED_USERS
+    return OWNER_USER_ID is not None and user_id == OWNER_USER_ID
 
 
-CONFIG_FILE = "config.yaml"
+def owner_only(handler):
+    """Restrict a Telegram command handler to the configured owner."""
+    @wraps(handler)
+    async def wrapped(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        user = update.effective_user
+        if user is None or not check_permission(user.id):
+            if update.message:
+                await update.message.reply_text("⛔ 无权限使用此 Bot")
+            return
+        return await handler(update, context)
+    return wrapped
 
 
 # ── 辅助函数 ──────────────────────────────────────────────────
 
-def load_config() -> dict:
-    """加载配置文件"""
-    if not os.path.exists(CONFIG_FILE):
-        logger.error(f"配置文件不存在: {CONFIG_FILE}")
-        sys.exit(1)
-    with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-        return yaml.safe_load(f)
-
-
-def save_config(config: dict):
-    """保存配置文件"""
-    with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-        yaml.dump(config, f, allow_unicode=True, default_flow_style=False)
-    logger.info("配置已保存")
+def normalize_stock_code(value: str) -> str:
+    """Validate and normalize an A-share code."""
+    value = value.strip()
+    if not value.isdigit() or not 1 <= len(value) <= 6:
+        raise ValueError("股票代码必须是 1-6 位数字")
+    return value.zfill(6)
 
 
 def get_stock_name(code: str) -> str:
@@ -95,6 +90,7 @@ def get_stock_name(code: str) -> str:
 
 # ── Bot 命令处理 ──────────────────────────────────────────────
 
+@owner_only
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """显示帮助信息"""
     help_text = (
@@ -118,13 +114,10 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(help_text, parse_mode="Markdown")
 
 
+@owner_only
 async def cmd_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """添加持仓"""
-    # 权限检查
     user_id = update.effective_user.id
-    if not check_permission(user_id):
-        await update.message.reply_text("⛔ 无权限使用此 Bot")
-        return
 
     args = context.args
     if len(args) < 3:
@@ -134,18 +127,22 @@ async def cmd_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    code = args[0].zfill(6)
     try:
+        code = normalize_stock_code(args[0])
         buy_price = float(args[1])
         shares = int(args[2])
         stop_loss = float(args[3]) if len(args) > 3 else -5.0
         take_profit = float(args[4]) if len(args) > 4 else 10.0
     except ValueError:
-        await update.message.reply_text("❌ 价格和股数必须是数字")
+        await update.message.reply_text("❌ 股票代码、价格或股数格式不正确")
+        return
+
+    if buy_price <= 0 or shares <= 0 or stop_loss >= 0 or take_profit <= 0:
+        await update.message.reply_text("❌ 买入价和股数必须为正，止损必须为负，止盈必须为正")
         return
 
     # 获取股票名称
-    name = get_stock_name(code)
+    name = await asyncio.to_thread(get_stock_name, code)
 
     # 加载用户配置
     config = load_user_config(user_id)
@@ -169,19 +166,20 @@ async def cmd_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(msg, parse_mode="Markdown")
 
 
+@owner_only
 async def cmd_remove(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """删除持仓"""
-    # 权限检查
     user_id = update.effective_user.id
-    if not check_permission(user_id):
-        await update.message.reply_text("⛔ 无权限使用此 Bot")
-        return
 
     if not context.args:
         await update.message.reply_text("❌ 用法: /remove <代码>")
         return
 
-    code = context.args[0].zfill(6)
+    try:
+        code = normalize_stock_code(context.args[0])
+    except ValueError as exc:
+        await update.message.reply_text(f"❌ {exc}")
+        return
     config = load_user_config(user_id)
 
     if code not in config["portfolio"]:
@@ -195,12 +193,10 @@ async def cmd_remove(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"✅ 已删除持仓: *{name}({code})*", parse_mode="Markdown")
 
 
+@owner_only
 async def cmd_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """列出所有持仓"""
     user_id = update.effective_user.id
-    if not check_permission(user_id):
-        await update.message.reply_text("⛔ 无权限使用此 Bot")
-        return
 
     config = load_user_config(user_id)
     portfolio = config.get("portfolio", {})
@@ -226,13 +222,10 @@ async def cmd_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("\n\n".join(lines), parse_mode="Markdown")
 
 
+@owner_only
 async def cmd_watch(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """添加关注股票"""
-    # 权限检查
     user_id = update.effective_user.id
-    if not check_permission(user_id):
-        await update.message.reply_text("⛔ 无权限使用此 Bot")
-        return
 
     if len(context.args) < 2:
         await update.message.reply_text(
@@ -241,7 +234,11 @@ async def cmd_watch(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    code = context.args[0].zfill(6)
+    try:
+        code = normalize_stock_code(context.args[0])
+    except ValueError as exc:
+        await update.message.reply_text(f"❌ {exc}")
+        return
     name = " ".join(context.args[1:])
 
     config = load_user_config(user_id)
@@ -254,19 +251,20 @@ async def cmd_watch(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+@owner_only
 async def cmd_unwatch(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """删除关注股票"""
-    # 权限检查
     user_id = update.effective_user.id
-    if not check_permission(user_id):
-        await update.message.reply_text("⛔ 无权限使用此 Bot")
-        return
 
     if not context.args:
         await update.message.reply_text("❌ 用法: /unwatch <代码>")
         return
 
-    code = context.args[0].zfill(6)
+    try:
+        code = normalize_stock_code(context.args[0])
+    except ValueError as exc:
+        await update.message.reply_text(f"❌ {exc}")
+        return
     config = load_user_config(user_id)
 
     if code not in config.get("watchlist", {}):
@@ -280,6 +278,7 @@ async def cmd_unwatch(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"✅ 已删除关注: *{name}({code})*", parse_mode="Markdown")
 
 
+@owner_only
 async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """查看监控状态"""
     user_id = update.effective_user.id
@@ -288,9 +287,6 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     config = load_user_config(user_id)
     portfolio_count = len(config.get("portfolio", {}))
     watchlist_count = len(config.get("watchlist", {}))
-    
-    # 统计总用户数
-    total_users = len(get_all_users())
     
     # 读取全局配置获取通知渠道
     global_config = load_config()
@@ -317,33 +313,36 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ── 新闻命令 ──────────────────────────────────────────────────
 
+@owner_only
 async def cmd_news(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """即时新闻"""
     await update.message.reply_text("📰 正在获取最新资讯...")
     try:
-        news = get_instant_news()
+        news = await asyncio.to_thread(get_instant_news)
         await update.message.reply_text(news)
     except Exception as e:
         logger.error(f"获取新闻失败: {e}")
         await update.message.reply_text("❌ 获取新闻失败，请稍后重试")
 
 
+@owner_only
 async def cmd_morning(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """早间新闻"""
     await update.message.reply_text("🌅 正在获取早间新闻...")
     try:
-        news = get_morning_news()
+        news = await asyncio.to_thread(get_morning_news)
         await update.message.reply_text(news)
     except Exception as e:
         logger.error(f"获取早间新闻失败: {e}")
         await update.message.reply_text("❌ 获取新闻失败，请稍后重试")
 
 
+@owner_only
 async def cmd_evening(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """晚间新闻"""
     await update.message.reply_text("🌆 正在获取晚间总结...")
     try:
-        news = get_evening_news()
+        news = await asyncio.to_thread(get_evening_news)
         await update.message.reply_text(news)
     except Exception as e:
         logger.error(f"获取晚间新闻失败: {e}")
@@ -354,7 +353,17 @@ async def cmd_evening(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def main():
     # 加载配置获取 Bot Token
-    config = load_config()
+    try:
+        config = load_config()
+    except ConfigError as exc:
+        logger.error(f"❌ {exc}")
+        sys.exit(2)
+
+    global OWNER_USER_ID
+    OWNER_USER_ID = get_owner_user_id(config)
+    if OWNER_USER_ID is None:
+        logger.error("❌ 请在 config.yaml 配置 app.owner_user_id 后再启动 Bot")
+        sys.exit(2)
     bot_token = config.get("notification", {}).get("telegram", {}).get("bot_token")
 
     if not bot_token or bot_token == "YOUR_BOT_TOKEN":

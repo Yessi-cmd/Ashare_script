@@ -1,4 +1,11 @@
 # ============================================================
+
+# ------ 个人模式 ------
+# 使用 Telegram Bot 管理持仓时，填写你自己的 Telegram User ID。
+# 配置后 monitor 只读取该用户在 SQLite 中的持仓，并忽略下方 YAML 股票池。
+# 仅使用 YAML 股票池时保持 null；此时 Bot 会拒绝启动。
+app:
+  owner_user_id: null
 # A股行情监控 V2 - 配置模板
 # 使用说明: 复制此文件为 config.yaml，然后填入你的信息
 # ============================================================
@@ -37,10 +44,47 @@ monitor:
     afternoon_start: "13:00"
     afternoon_end: "15:00"
 
+# ------ 港股 / 韩国 / 美股 / 日本行情面板 ------
+# 采集器独立于 A股交易时段运行，报价可能存在延迟。
+global_markets:
+  enabled: true
+  poll_interval_seconds: 300
+  request_timeout_seconds: 10
+  markets:
+    hk:
+      name: "港股"
+      indices:
+        - { symbol: "^HSI", name: "恒生指数" }
+    kr:
+      name: "韩国"
+      indices:
+        - { symbol: "^KS11", name: "KOSPI" }
+    us:
+      name: "美股"
+      indices:
+        - { symbol: "^GSPC", name: "标普 500" }
+        - { symbol: "^IXIC", name: "纳斯达克综合" }
+        - { symbol: "^DJI", name: "道琼斯工业平均" }
+    jp:
+      name: "日本"
+      indices:
+        - { symbol: "^N225", name: "日经 225" }
+
 # ------ 买入信号灵敏度 ------
 signal:
   buy_threshold: 70          # ≥70分 推送买入信号（越低越灵敏）
   sell_threshold: 30         # ≤30分 推送远离信号
+
+# ------ 全市场扫描（可选） ------
+full_market:
+  enabled: false
+  prefilter:
+    min_price_change: 5.0
+    min_volume_ratio: 0       # 0 表示不按量比过滤
+    min_market_cap: 50        # 流通市值，单位：亿元
+    max_results: 100
+  scoring:
+    min_score: 70
 
 # ------ 通知渠道 ------
 # 至少启用一个渠道，不需要的 enabled 设为 false

@@ -1,0 +1,23 @@
+[Unit]
+Description=A股个人股票池日线同步
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=ashare
+Group=ashare
+WorkingDirectory=/opt/ashare_monitor
+Environment=PYTHONUNBUFFERED=1
+Environment=TZ=Asia/Shanghai
+EnvironmentFile=-/etc/ashare-monitor/ashare.env
+ExecStart=/opt/ashare_monitor/venv/bin/python sync_universe.py
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/ashare_monitor
+RestrictSUIDSGID=true
+LockPersonality=true
+CapabilityBoundingSet=

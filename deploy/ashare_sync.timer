@@ -1,0 +1,11 @@
+[Unit]
+Description=工作日收盘后同步 A股日线
+
+[Timer]
+OnCalendar=Mon..Fri *-*-* 16:10:00 Asia/Shanghai
+Persistent=true
+RandomizedDelaySec=10m
+Unit=ashare_sync.service
+
+[Install]
+WantedBy=timers.target

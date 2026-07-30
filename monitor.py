@@ -14,28 +14,42 @@ A股行情监控 V2 - 主程序
 """
 
 import argparse
+import copy
 import logging
-import os
 import signal
 import sys
+import threading
 import time
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
-import yaml
-
-from holidays import is_trading_day, is_holiday, is_weekend, get_holiday_name, get_next_trading_day
+from holidays import (
+    get_holiday_name,
+    get_next_trading_day,
+    is_calendar_supported,
+    is_holiday,
+    is_trading_day,
+    is_weekend,
+)
+from alert_store import load_alert_cache, mark_alerted
 from strategies import fetch_realtime_quotes, run_all_checks, prefilter_full_market
+from snapshot_store import save_quote_snapshots
 from notifier import format_alerts, send_notification
-from user_config import get_all_portfolios, get_all_watchlists, get_all_users
+from settings import ConfigError, get_owner_user_id, load_config
+from user_config import load_user_config
 
 # ── 全局 ──────────────────────────────────────────────────────
 
 RUNNING = True
+STOP_EVENT = threading.Event()
+SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
+logger = logging.getLogger(__name__)
 
 
 def signal_handler(signum, frame):
     global RUNNING
     RUNNING = False
+    STOP_EVENT.set()
     logger.info("收到退出信号，正在停止...")
 
 
@@ -63,7 +77,7 @@ def setup_logging(config: dict):
 
 def is_trading_time(config: dict) -> bool:
     """判断当前是否在交易时段（含节假日检测）"""
-    now = datetime.now()
+    now = datetime.now(SHANGHAI_TZ)
     today = now.date()
 
     # 检查是否为交易日
@@ -85,20 +99,26 @@ def is_trading_time(config: dict) -> bool:
 
 def get_market_status_message() -> str:
     """获取当前市场状态的友好提示"""
-    now = datetime.now()
+    now = datetime.now(SHANGHAI_TZ)
     today = now.date()
 
     if is_holiday(today):
         name = get_holiday_name(today)
-        next_td = get_next_trading_day(today)
+        try:
+            next_td = get_next_trading_day(today)
+        except ValueError as exc:
+            return f"🏮 今天{name}休市 | {exc}"
         return f"🏮 今天{name}休市 | 下一个交易日: {next_td.strftime('%m月%d日')}"
     elif is_weekend(today):
-        next_td = get_next_trading_day(today)
+        try:
+            next_td = get_next_trading_day(today)
+        except ValueError as exc:
+            return f"📅 周末休市 | {exc}"
         return f"📅 周末休市 | 下一个交易日: {next_td.strftime('%m月%d日')}"
     else:
         hour = now.hour
         if hour < 9:
-            return "⏳ 等待开盘（9:30）..."
+            return "⏳ 等待开盘（9:15）..."
         elif 11 < hour < 13:
             return "☕ 午间休市中（13:00开盘）..."
         elif hour >= 15:
@@ -114,7 +134,8 @@ def print_dashboard(quotes_df, config: dict, score_details: dict):
     watchlist = config.get("watchlist", {})
 
     print("\n" + "=" * 72)
-    print(f"  📊 A股行情监控  |  {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    now = datetime.now(SHANGHAI_TZ)
+    print(f"  📊 A股行情监控  |  {now.strftime('%Y-%m-%d %H:%M:%S')}")
     print("=" * 72)
 
     # ─── 持仓部分 ───
@@ -162,7 +183,7 @@ def print_dashboard(quotes_df, config: dict, score_details: dict):
     # ─── 关注池 ───
     watch_rows = quotes_df[quotes_df["代码"].isin(watchlist.keys())]
     if not watch_rows.empty:
-        print(f"\n  👀 关注池")
+        print("\n  👀 关注池")
         print(f"  {'股票':<12} {'现价':>8} {'今日涨跌':>10} {'评分':>6} {'建议':>8}")
         print("  " + "-" * 56)
 
@@ -191,24 +212,23 @@ def print_dashboard(quotes_df, config: dict, score_details: dict):
 
 # ── 主循环 ────────────────────────────────────────────────────
 
+def build_runtime_config(config: dict) -> tuple[dict, str]:
+    """Build one monitoring snapshot from the configured single-user source."""
+    runtime_config = copy.deepcopy(config)
+    owner_user_id = get_owner_user_id(config)
+    if owner_user_id is None:
+        runtime_config["portfolio"] = config.get("portfolio", {}) or {}
+        runtime_config["watchlist"] = config.get("watchlist", {}) or {}
+        return runtime_config, "YAML 本地配置"
+
+    user_config = load_user_config(owner_user_id, create_user=False)
+    runtime_config["portfolio"] = user_config.get("portfolio", {})
+    runtime_config["watchlist"] = user_config.get("watchlist", {})
+    return runtime_config, "SQLite 单用户数据"
+
+
 def monitor_loop(config: dict, test_mode: bool = False, once: bool = False):
     """主监控循环"""
-    # 从数据库读取所有用户的持仓和关注池
-    portfolios_by_user = get_all_portfolios()  # {user_id: {code: {...}}}
-    watchlists_by_user = get_all_watchlists()  # {user_id: {code: name}}
-    
-    # 合并所有用户的持仓和关注池
-    portfolio = {}
-    for user_id, user_portfolio in portfolios_by_user.items():
-        portfolio.update(user_portfolio)
-    
-    watchlist = {}
-    for user_id, user_watchlist in watchlists_by_user.items():
-        watchlist.update(user_watchlist)
-    
-    total_users = len(get_all_users())
-    logger.info(f"📊 监控 {total_users} 个用户的股票池")
-    
     full_market = config.get("full_market", {})
     full_market_enabled = full_market.get("enabled", False)
     
@@ -221,28 +241,19 @@ def monitor_loop(config: dict, test_mode: bool = False, once: bool = False):
         logger.info(f"  阶段2评分: 最多保留{prefilter_cfg.get('max_results', 100)}只股票")
         scoring_cfg = full_market.get("scoring", {})
         logger.info(f"  买入信号: 评分≥{scoring_cfg.get('min_score', 70)}")
-        all_codes = []  # 全市场模式不需要预定义股票池
-    else:
-        all_codes = list(set(list(portfolio.keys()) + list(watchlist.keys())))
-        if not all_codes:
-            logger.error("股票池为空！请在 config.yaml 中配置 portfolio / watch list 或启用 full_market")
-            sys.exit(1)
-        
-        # 显示监控信息
-        logger.info(f"持仓股票: {len(portfolio)} 只")
-        for code, info in portfolio.items():
-            logger.info(f"  {info.get('name', code)}({code}) "
-                       f"买入价 ¥{info.get('buy_price', 0):.2f} × {info.get('shares', 0)}股 "
-                       f"止损 {info.get('stop_loss', -5)}% / 止盈 {info.get('take_profit', 10)}%")
-        
-        logger.info(f"关注股票: {len(watchlist)} 只")
-    
+
     interval = config.get("monitor", {}).get("interval_seconds", 30)
     logger.info(f"轮询间隔: {interval} 秒")
 
     # 告警去重
-    alerted_cache: dict[str, float] = {}
+    alert_owner_user_id = get_owner_user_id(config) or 0
+    try:
+        alerted_cache = load_alert_cache(alert_owner_user_id)
+    except Exception as exc:
+        logger.warning(f"读取持久化告警状态失败，将使用内存去重: {exc}")
+        alerted_cache = {}
     ALERT_COOLDOWN = 300
+    previous_codes = None
 
     while RUNNING:
         try:
@@ -250,7 +261,27 @@ def monitor_loop(config: dict, test_mode: bool = False, once: bool = False):
             if not test_mode and not once and not is_trading_time(config):
                 status_msg = get_market_status_message()
                 logger.info(f"⏸  {status_msg}")
-                time.sleep(60)
+                STOP_EVENT.wait(60)
+                continue
+
+            runtime_config, data_source = build_runtime_config(config)
+            portfolio = runtime_config.get("portfolio", {})
+            watchlist = runtime_config.get("watchlist", {})
+            all_codes = sorted(set(portfolio) | set(watchlist))
+
+            current_codes = tuple(all_codes)
+            if current_codes != previous_codes and not full_market_enabled:
+                logger.info(
+                    f"📊 数据源: {data_source} | 持仓 {len(portfolio)} 只 | "
+                    f"关注 {len(watchlist)} 只"
+                )
+                previous_codes = current_codes
+
+            if not full_market_enabled and not all_codes:
+                logger.warning("股票池为空，请配置 app.owner_user_id 后通过 Bot 添加，或填写 YAML 股票池")
+                if test_mode or once:
+                    return False
+                STOP_EVENT.wait(interval)
                 continue
 
             # 获取行情
@@ -263,7 +294,7 @@ def monitor_loop(config: dict, test_mode: bool = False, once: bool = False):
                     if test_mode or once:
                         logger.info("✅ 测试完成（无符合条件的股票）")
                         break
-                    time.sleep(interval)
+                    STOP_EVENT.wait(interval)
                     continue
             else:
                 # 关注池模式
@@ -272,14 +303,21 @@ def monitor_loop(config: dict, test_mode: bool = False, once: bool = False):
 
             if quotes is None or quotes.empty:
                 logger.warning("获取行情失败，等待重试...")
-                time.sleep(interval)
+                if test_mode or once:
+                    return False
+                STOP_EVENT.wait(interval)
                 continue
 
             # 执行检测
-            alerts, score_details = run_all_checks(quotes, config)
+            alerts, score_details = run_all_checks(quotes, runtime_config)
+
+            try:
+                save_quote_snapshots(quotes, score_details)
+            except Exception as exc:
+                logger.warning(f"保存 Web 行情快照失败，不影响本轮告警: {exc}")
 
             # 打印仪表盘
-            print_dashboard(quotes, config, score_details)
+            print_dashboard(quotes, runtime_config, score_details)
 
             # 处理告警
             if alerts:
@@ -290,7 +328,6 @@ def monitor_loop(config: dict, test_mode: bool = False, once: bool = False):
                     last_time = alerted_cache.get(key, 0)
                     if now_ts - last_time >= ALERT_COOLDOWN:
                         new_alerts.append(alert)
-                        alerted_cache[key] = now_ts
 
                 if new_alerts:
                     logger.info(f"🔔 发现 {len(new_alerts)} 条提醒！")
@@ -304,26 +341,43 @@ def monitor_loop(config: dict, test_mode: bool = False, once: bool = False):
                         has_urgent = any(a.alert_type in ("stop_loss", "take_profit")
                                          for a in new_alerts)
                         subject = "🚨 A股紧急提醒" if has_urgent else "📊 A股行情提醒"
-                        send_notification(message, config, subject=subject)
+                        results = send_notification(message, config, subject=subject)
+                        delivered = not results or any(results.values())
+                        if delivered:
+                            for alert in new_alerts:
+                                key = f"{alert.stock_code}:{alert.alert_type}"
+                                alerted_cache[key] = now_ts
+                            try:
+                                mark_alerted(alert_owner_user_id, new_alerts, now_ts)
+                            except Exception as exc:
+                                logger.warning(f"保存告警去重状态失败: {exc}")
+                        else:
+                            logger.warning("所有通知渠道均发送失败，将在下一轮重试")
                     else:
                         print("\n" + format_alerts(new_alerts))
                         print("（测试模式 - 未发送通知）")
+                        for alert in new_alerts:
+                            key = f"{alert.stock_code}:{alert.alert_type}"
+                            alerted_cache[key] = now_ts
             else:
                 logger.info("✅ 一切正常，无需提醒")
 
             if test_mode or once:
-                break
+                return True
 
             logger.info(f"等待 {interval} 秒...")
-            time.sleep(interval)
+            STOP_EVENT.wait(interval)
 
         except KeyboardInterrupt:
             break
         except Exception as e:
             logger.error(f"监控异常: {e}", exc_info=True)
-            time.sleep(interval)
+            if test_mode or once:
+                return False
+            STOP_EVENT.wait(interval)
 
     logger.info("监控已停止")
+    return True
 
 
 # ── 入口 ──────────────────────────────────────────────────────
@@ -339,12 +393,16 @@ def main():
     args = parser.parse_args()
 
     config_path = args.config
-    if not os.path.exists(config_path):
-        print(f"❌ 配置文件不存在: {config_path}")
-        sys.exit(1)
+    try:
+        config = load_config(config_path)
+    except ConfigError as exc:
+        print(f"❌ {exc}")
+        sys.exit(2)
 
-    with open(config_path, "r", encoding="utf-8") as f:
-        config = yaml.safe_load(f)
+    current_year = datetime.now(SHANGHAI_TZ).year
+    if not is_calendar_supported(current_year):
+        print(f"❌ 尚未配置 {current_year} 年 A 股交易日历，请先更新 holidays.py")
+        sys.exit(2)
 
     global logger
     logger = setup_logging(config)
@@ -367,7 +425,9 @@ def main():
     else:
         logger.info("🔄 运行模式: 持续监控")
 
-    monitor_loop(config, test_mode=args.test, once=args.once)
+    success = monitor_loop(config, test_mode=args.test, once=args.once)
+    if not success:
+        sys.exit(1)
 
 
 if __name__ == "__main__":

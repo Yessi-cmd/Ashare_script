@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="hero">
+  <div><p class="eyebrow">TODAY'S RESEARCH DESK</p><h1>先看机会，再看风险。</h1><p>候选、持仓和失效条件集中在一个行动台。</p></div>
+  <div class="freshness {{ 'ok' if data.latest_quote_at else 'stale' }}">
+    <span>最新快照</span><strong>{{ data.latest_quote_at or '尚无数据' }}</strong>
+  </div>
+</section>
+
+<section class="panel focus-panel">
+  <div class="section-title"><div><h2>今日重点候选</h2><p>只从本地 {{ data.recommendations.universe_size }} 股研究样本中排序，不代表全市场。</p></div><a href="/recommendations">查看完整研究榜 →</a></div>
+  <div class="candidate-grid compact-candidates">{% for row in data.recommendations.candidates %}
+    <a class="candidate-card" href="/stocks/{{ row.code }}">
+      <div class="candidate-head"><div><span class="pill label-{{ row.label }}">{{ row.label }}</span><h3>{{ row.name }}</h3><small>{{ row.code }}</small></div><strong class="candidate-score">{{ row.score }}</strong></div>
+      <p>{{ row.reasons|join(' · ') }}</p>
+      <div class="candidate-foot"><span>失效位 ¥{{ '%.2f'|format(row.invalidation_price) }}</span><span>20日 {{ '%+.1f'|format(row.momentum_20) }}%</span></div>
+    </a>{% else %}<p class="empty">本地日线不足，完成数据同步后显示候选。</p>{% endfor %}</div>
+  <div class="scope-note">数据日：{{ data.recommendations.as_of or '暂无' }} · 模型：{{ data.recommendations.model }} · “重点研究”不是买入指令</div>
+</section>
+
+<section class="metrics">
+  <article><span>持仓市值</span><strong>¥{{ '%.2f'|format(data.total_value) }}</strong></article>
+  <article><span>累计盈亏</span><strong class="{{ 'up' if data.total_profit >= 0 else 'down' }}">{{ '%+.2f'|format(data.total_profit) }}</strong></article>
+  <article><span>收益率</span><strong class="{{ 'up' if data.total_profit_pct >= 0 else 'down' }}">{{ '%+.2f'|format(data.total_profit_pct) }}%</strong></article>
+  <article><span>关注数量</span><strong>{{ data.watchlist|length }}</strong></article>
+</section>
+
+<section class="panel">
+  <div class="section-title"><h2>持仓</h2><span>{{ data.portfolio|length }} 只</span></div>
+  <div class="table-wrap"><table>
+    <thead><tr><th>股票</th><th>现价</th><th>今日</th><th>持仓收益</th><th>评分</th><th>状态</th></tr></thead>
+    <tbody>{% for row in data.portfolio %}
+      <tr>
+        <td><a href="/stocks/{{ row.code }}"><strong>{{ row.name }}</strong><small>{{ row.code }}</small></a></td>
+        <td>{{ '%.2f'|format(row.snapshot.price) if row.snapshot else '—' }}</td>
+        <td class="{{ 'up' if row.snapshot and row.snapshot.change_pct >= 0 else 'down' }}">{{ '%+.2f'|format(row.snapshot.change_pct) ~ '%' if row.snapshot else '—' }}</td>
+        <td class="{{ 'up' if row.profit_pct is not none and row.profit_pct >= 0 else 'down' }}">{{ '%+.2f'|format(row.profit_pct) ~ '%' if row.profit_pct is not none else '—' }}</td>
+        <td><span class="score">{{ row.snapshot.score if row.snapshot and row.snapshot.score is not none else '—' }}</span></td>
+        <td><span class="pill {{ 'stale' if not row.snapshot or row.snapshot.stale else 'ok' }}">{{ '数据过期' if not row.snapshot or row.snapshot.stale else '正常' }}</span></td>
+      </tr>{% else %}<tr><td colspan="6" class="empty">暂无持仓记录</td></tr>{% endfor %}</tbody>
+  </table></div>
+</section>
+
+<section class="panel">
+  <div class="section-title"><h2>关注池</h2><span>{{ data.watchlist|length }} 只</span></div>
+  <div class="watch-grid">{% for row in data.watchlist %}
+    <a class="watch-card" href="/stocks/{{ row.code }}">
+      <div><strong>{{ row.name }}</strong><small>{{ row.code }}</small></div>
+      <div class="quote"><strong>{{ '%.2f'|format(row.snapshot.price) if row.snapshot else '—' }}</strong><span class="{{ 'up' if row.snapshot and row.snapshot.change_pct >= 0 else 'down' }}">{{ '%+.2f'|format(row.snapshot.change_pct) ~ '%' if row.snapshot else '无快照' }}</span></div>
+      <p>{{ row.snapshot.reason if row.snapshot else '监控进程写入快照后显示评分' }}</p>
+    </a>{% else %}<p class="empty">暂无关注股票</p>{% endfor %}</div>
+</section>
+{% endblock %}

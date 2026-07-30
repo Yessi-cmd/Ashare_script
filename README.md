@@ -1,4 +1,4 @@
-# 📊 A股行情监控 V2
+# 📊 A股个人研究与监控平台
 
 > 智能监控 A股行情，自动评估买卖时机，持仓止盈止损提醒，通过 Telegram/钉钉/邮件推送通知。
 
@@ -13,7 +13,7 @@
 - **评分理由解释**："处于超卖区域，有反弹可能"
 
 ### 💼 持仓管理
-- **多用户支持**：每个用户独立持仓，数据隔离
+- **个人单用户模式**：监控仅绑定一个 Telegram User ID，避免误用其他数据
 - **SQLite 数据库存储**：可靠、高效、并发安全
 - **止盈止损自动提醒**：设定百分比阈值，触发时推送通知
 - **实时盈亏追踪**：持仓总盈亏、单只股票盈亏实时展示
@@ -34,6 +34,23 @@
 - Telegram Bot（推荐，海外服务器直连）
 - 钉钉机器人 Webhook
 - 邮件 SMTP
+
+### 🧪 可审计策略研究
+- 本地 qfq 日线仓库与显式 raw 指数数据源
+- 无未来函数、次日开盘成交、包含佣金/印花税/滑点的回测器
+- 训练集选参、严格样本外验证、跨股票与滚动窗口对照
+- V3 多因子目前仅为研究候选；因稳定性未达标，不会冒险替换实时 V2
+
+### 🌐 个人 Web 仪表盘
+- FastAPI + Jinja2 + ECharts，只读本地行情快照和日线
+- 中文登录页与最长 30 天签名会话，持仓盈亏、K 线和系统状态
+- 19 股本地可解释荐股榜：入选理由、反对理由、风险与观察失效位
+- 可收藏 URL 的组合自助选股器；明确研究范围，不冒充全市场扫描
+
+### 🌏 多市场行情面板
+- `/markets` 展示港股恒生、韩国 KOSPI、美股标普/纳指/道指、日本日经 225
+- 独立采集进程按配置间隔写入本地快照，Web 页面不直接请求外网
+- 使用 Yahoo Finance Chart API，页面明确标注可能延迟和数据新鲜度
 
 ## 🚀 快速开始
 
@@ -57,9 +74,11 @@ vim config.yaml
 ```
 
 **必填配置项**：
-- `portfolio`: 你的持仓（代码、买入价、股数、止损止盈阈值）
-- `watchlist`: 关注池（不持仓但想监控的股票）
+- 本地模式：填写 `portfolio` 和 `watchlist`
+- Bot 模式：填写 `app.owner_user_id`，持仓和关注池通过 Bot 保存到 SQLite
 - `notification`: 至少启用一个通知渠道
+
+两种持仓来源不会混用：配置了 `app.owner_user_id` 后，监控只读取该用户的数据库记录；保持 `null` 时只读取 YAML 股票池。
 
 ### 3. 运行
 
@@ -72,6 +91,11 @@ python monitor.py --once
 
 # 持续监控
 python monitor.py
+
+# 跨市场指数采集（独立于 A股交易时段）
+python market_monitor.py
+python market_monitor.py --once
+python market_monitor.py --test
 ```
 
 ### 4. Telegram Bot 管理持仓（可选）
@@ -86,6 +110,37 @@ python bot.py &
 /remove 600519             # 删除持仓
 /status                    # 查看监控状态
 ```
+
+启动 Bot 前必须将 `app.owner_user_id` 设置为你自己的 Telegram User ID；未配置时 Bot 会安全退出，不再默认允许所有人使用。
+
+### 5. 启动只读 Web（可选）
+
+```bash
+export ASHARE_WEB_USERNAME='你的用户名'
+export ASHARE_WEB_PASSWORD='密码管理器生成的长随机密码'
+export ASHARE_WEB_SESSION_SECRET='另一段至少32字节的随机值'
+python web_app.py
+```
+
+打开 `http://127.0.0.1:8000`。开发机之外不要直接暴露 8000；服务器步骤见 [部署指南](deploy/README_deploy.md)。
+
+### 6. 策略研究
+
+```bash
+# 同步本地日线
+python research.py sync 600519 --start 2024-01-01 --end 2026-07-17
+
+# 运行 V2/V3 回测
+python research.py backtest 600519 --strategy v2 --start 2024-01-01
+
+# 训练集选阈值，再评估后续验证集
+python research.py walk-forward 000001 600519 300750 \
+  --train-start 2024-01-01 --train-end 2025-06-30 \
+  --validation-start 2025-07-01 --validation-end 2026-07-17 \
+  --strategy v3 --thresholds 60,65,70,75,80
+```
+
+完整设计、实验失败和样本外证据见 [升级路线](docs/roadmap/README.md)。
 
 ## 📋 示例输出
 
@@ -122,10 +177,20 @@ python bot.py &
 Ashare_script/
 ├── main.py             # 主入口（一键启动所有服务）
 ├── monitor.py          # 主监控程序
+├── market_monitor.py   # 港股/韩国/美股/日本指数采集
 ├── bot.py              # Telegram Bot 交互管理
 ├── database.py         # SQLAlchemy ORM 模型
 ├── user_config.py      # 用户配置数据库访问层
+├── settings.py         # 配置加载与启动校验
 ├── strategies.py       # 评分系统 + 止盈止损
+├── market_data.py      # 本地日线仓库和外部源降级
+├── backtest_engine.py  # 无未来函数回测器
+├── strategy_v3.py      # 多因子研究候选（未上线）
+├── walk_forward.py     # 训练/验证分离
+├── research.py         # 研究 CLI
+├── web_app.py          # 只读个人 Web
+├── snapshot_store.py   # 监控到 Web 的本地快照
+├── global_market_data.py # 跨市场定义、解析和快照存储
 ├── notifier.py         # 通知模块
 ├── news.py             # 新闻资讯模块
 ├── holidays.py         # A股节假日日历
@@ -136,14 +201,25 @@ Ashare_script/
 └── deploy/
     ├── ashare_monitor.service  # systemd 服务文件
     ├── ashare_bot.service      # Bot 服务文件
+    ├── ashare_web.service      # Web 服务文件
+    ├── ashare_market_monitor.service # 跨市场指数采集
+    ├── ashare_sync.timer       # 收盘后日线同步
+    ├── ashare_backup.timer     # SQLite 在线备份
     └── README_deploy.md        # 部署指南
+```
+
+## ✅ 自动化测试
+
+```bash
+source venv/bin/activate
+pip install -r requirements-dev.txt
+ruff check .
+python -m unittest discover -s tests -v
 ```
 
 ## 🌐 服务器部署
 
-**推荐部署到东京服务器**（延迟低 ~30-60ms，时区友好）
-
-详见 [部署指南](deploy/README_deploy.md)
+支持普通 Linux 服务器，优先使用 Tailscale 私网 HTTPS；无法安装客户端时使用 Caddy + Cloudflare Access。详见 [部署指南](deploy/README_deploy.md)。
 
 ## 🤝 贡献
 

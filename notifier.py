@@ -21,6 +21,23 @@ import yaml
 logger = logging.getLogger(__name__)
 
 
+def _split_message(message: str, limit: int = 4000) -> list[str]:
+    """Split a platform message on line boundaries."""
+    chunks = []
+    current = ""
+    for line in message.splitlines(keepends=True):
+        if current and len(current) + len(line) > limit:
+            chunks.append(current)
+            current = ""
+        while len(line) > limit:
+            chunks.append(line[:limit])
+            line = line[limit:]
+        current += line
+    if current:
+        chunks.append(current)
+    return chunks or [""]
+
+
 # ── Telegram ──────────────────────────────────────────────────
 
 def send_telegram(message: str, config: dict) -> bool:
@@ -32,21 +49,19 @@ def send_telegram(message: str, config: dict) -> bool:
     chat_id = config["chat_id"]
     url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
 
-    payload = {
-        "chat_id": chat_id,
-        "text": message,
-        "parse_mode": "HTML",
-        "disable_web_page_preview": True,
-    }
-
     try:
-        resp = requests.post(url, json=payload, timeout=10)
-        if resp.status_code == 200:
-            logger.info("Telegram 消息发送成功")
-            return True
-        else:
-            logger.error(f"Telegram 发送失败: {resp.status_code} - {resp.text}")
-            return False
+        for chunk in _split_message(message):
+            payload = {
+                "chat_id": chat_id,
+                "text": chunk,
+                "disable_web_page_preview": True,
+            }
+            resp = requests.post(url, json=payload, timeout=10)
+            if resp.status_code != 200:
+                logger.error(f"Telegram 发送失败: {resp.status_code} - {resp.text}")
+                return False
+        logger.info("Telegram 消息发送成功")
+        return True
     except Exception as e:
         logger.error(f"Telegram 发送异常: {e}")
         return False

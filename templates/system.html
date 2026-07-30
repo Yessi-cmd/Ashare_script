@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="hero compact"><div><p class="eyebrow">LOCAL DATA STATUS</p><h1>系统状态</h1><p>页面只检查本地数据库，不触发外部请求。</p></div></section>
+<section class="metrics system">
+  <article><span>日线记录</span><strong>{{ data.bar_count }}</strong><small>{{ data.stock_count }} 个代码</small></article>
+  <article><span>最新交易日</span><strong>{{ data.latest_bar or '—' }}</strong></article>
+  <article><span>行情快照</span><strong>{{ data.snapshot_count }}</strong><small>{{ data.latest_quote or '尚无' }}</small></article>
+  <article><span>数据库大小</span><strong>{{ '%.1f MB'|format(data.database_size / 1048576) if data.database_size else '—' }}</strong></article>
+</section>
+{% endblock %}

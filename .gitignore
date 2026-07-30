@@ -25,6 +25,8 @@ config.yaml
 # 数据库文件
 *.db
 *.db-journal
+*.db-wal
+*.db-shm
 users/
 
 # 日志

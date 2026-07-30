@@ -3,17 +3,31 @@
 数据库模型定义
 使用 SQLAlchemy ORM
 """
-from datetime import datetime
-from typing import Optional, List, Dict
-from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, ForeignKey
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker, relationship, Session
 import logging
+import os
+import threading
+from datetime import datetime
+from pathlib import Path
+
+from sqlalchemy import (
+    Column,
+    Date,
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    create_engine,
+    event,
+)
+from sqlalchemy.orm import Session, declarative_base, relationship, sessionmaker
 
 logger = logging.getLogger(__name__)
 
-# 数据库文件路径
-DATABASE_URL = "sqlite:///ashare_monitor.db"
+# 数据库文件默认固定在项目目录，避免从不同工作目录启动时创建多份数据库。
+DEFAULT_DB_PATH = Path(__file__).resolve().with_name("ashare_monitor.db")
+DATABASE_URL = os.getenv("ASHARE_DATABASE_URL", f"sqlite:///{DEFAULT_DB_PATH}")
 
 # 创建引擎
 engine = create_engine(
@@ -22,8 +36,21 @@ engine = create_engine(
     connect_args={"check_same_thread": False}  # SQLite 多线程支持
 )
 
+
+@event.listens_for(engine, "connect")
+def _enable_sqlite_foreign_keys(dbapi_connection, _connection_record):
+    """Enable SQLite foreign-key enforcement for every connection."""
+    if DATABASE_URL.startswith("sqlite"):
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.execute("PRAGMA busy_timeout=5000")
+        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.close()
+
 # 创建 Session 工厂
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+_DB_INIT_LOCK = threading.Lock()
+_DB_INITIALIZED = False
 
 # 创建基类
 Base = declarative_base()
@@ -65,6 +92,10 @@ class Portfolio(Base):
     
     # 关联关系
     user = relationship("User", back_populates="portfolios")
+
+    __table_args__ = (
+        Index("uq_portfolios_user_stock", "user_id", "stock_code", unique=True),
+    )
     
     def __repr__(self):
         return f"<Portfolio(user={self.user_id}, stock={self.stock_code}, name={self.name})>"
@@ -82,9 +113,92 @@ class Watchlist(Base):
     
     # 关联关系
     user = relationship("User", back_populates="watchlist")
+
+    __table_args__ = (
+        Index("uq_watchlist_user_stock", "user_id", "stock_code", unique=True),
+    )
     
     def __repr__(self):
         return f"<Watchlist(user={self.user_id}, stock={self.stock_code}, name={self.name})>"
+
+
+class AlertState(Base):
+    """Persistent cooldown state for the personal monitor."""
+    __tablename__ = "alert_states"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    owner_user_id = Column(Integer, nullable=False, default=0)
+    stock_code = Column(String(10), nullable=False)
+    alert_type = Column(String(30), nullable=False)
+    last_alerted_at = Column(Float, nullable=False)
+
+    __table_args__ = (
+        Index(
+            "uq_alert_state_owner_stock_type",
+            "owner_user_id",
+            "stock_code",
+            "alert_type",
+            unique=True,
+        ),
+    )
+
+
+class DailyBar(Base):
+    """Normalized daily A-share bar used by research and backtests."""
+    __tablename__ = "daily_bars"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    stock_code = Column(String(10), nullable=False)
+    trade_date = Column(Date, nullable=False)
+    adjust = Column(String(10), nullable=False, default="qfq")
+    open = Column(Float, nullable=False)
+    high = Column(Float, nullable=False)
+    low = Column(Float, nullable=False)
+    close = Column(Float, nullable=False)
+    volume = Column(Float, nullable=False)
+    amount = Column(Float, nullable=True)
+    source = Column(String(30), nullable=False, default="akshare")
+    fetched_at = Column(DateTime, default=datetime.now, nullable=False)
+
+    __table_args__ = (
+        Index(
+            "uq_daily_bars_code_date_adjust",
+            "stock_code",
+            "trade_date",
+            "adjust",
+            unique=True,
+        ),
+        Index("ix_daily_bars_code_date", "stock_code", "trade_date"),
+    )
+
+
+class QuoteSnapshot(Base):
+    """Latest locally persisted realtime quote and live V2 score."""
+    __tablename__ = "quote_snapshots"
+
+    stock_code = Column(String(10), primary_key=True)
+    name = Column(String(50), nullable=False)
+    price = Column(Float, nullable=False)
+    change_pct = Column(Float, nullable=False)
+    volume = Column(Float, nullable=True)
+    score = Column(Integer, nullable=True)
+    reason = Column(String(500), nullable=True)
+    quote_at = Column(DateTime, nullable=False, index=True)
+
+
+class MarketQuoteSnapshot(Base):
+    """Latest quote for a cross-market benchmark index."""
+    __tablename__ = "market_quote_snapshots"
+
+    market = Column(String(20), primary_key=True)
+    symbol = Column(String(30), primary_key=True)
+    name = Column(String(80), nullable=False)
+    price = Column(Float, nullable=False)
+    change_pct = Column(Float, nullable=False)
+    currency = Column(String(10), nullable=False)
+    quote_at = Column(DateTime, nullable=False, index=True)
+    market_at = Column(DateTime, nullable=True)
+    source = Column(String(40), nullable=False, default="yahoo_chart")
 
 
 # ── 数据库初始化 ──────────────────────────────────────────────────
@@ -92,18 +206,32 @@ class Watchlist(Base):
 
 def init_db():
     """初始化数据库（创建所有表）"""
-    Base.metadata.create_all(bind=engine)
-    logger.info("数据库初始化完成")
+    global _DB_INITIALIZED
+    if _DB_INITIALIZED:
+        return
+    with _DB_INIT_LOCK:
+        if _DB_INITIALIZED:
+            return
+        Base.metadata.create_all(bind=engine)
+        # create_all 不会为既有表补建后加入的索引，因此显式检查创建。
+        for table in (
+            Portfolio.__table__,
+            Watchlist.__table__,
+            AlertState.__table__,
+            DailyBar.__table__,
+            QuoteSnapshot.__table__,
+            MarketQuoteSnapshot.__table__,
+        ):
+            for index in table.indexes:
+                if index.unique:
+                    index.create(bind=engine, checkfirst=True)
+        _DB_INITIALIZED = True
+        logger.info("数据库初始化完成")
 
 
 def get_db() -> Session:
     """获取数据库会话"""
-    db = SessionLocal()
-    try:
-        return db
-    except Exception as e:
-        db.close()
-        raise e
+    return SessionLocal()
 
 
 # ── ORM 辅助函数 ──────────────────────────────────────────────────
@@ -213,30 +341,6 @@ def remove_watchlist(db: Session, user_id: int, stock_code: str) -> bool:
 
 
 if __name__ == "__main__":
-    # 测试数据库
     logging.basicConfig(level=logging.INFO)
-    
-    # 初始化数据库
     init_db()
-    
-    # 测试 CRUD
-    db = get_db()
-    
-    # 创建用户
-    user = get_or_create_user(db, 123456789, "测试用户")
-    
-    # 添加持仓
-    add_portfolio(db, 123456789, "600519", "贵州茅台", 1500, 100, -5, 10)
-    
-    # 添加关注
-    add_watchlist(db, 123456789, "300750", "宁德时代")
-    
-    # 查询
-    portfolios = db.query(Portfolio).filter(Portfolio.user_id == 123456789).all()
-    print(f"持仓: {portfolios}")
-    
-    watchlist = db.query(Watchlist).filter(Watchlist.user_id == 123456789).all()
-    print(f"关注: {watchlist}")
-    
-    db.close()
-    print("✅ 数据库测试完成")
+    print(f"✅ 数据库初始化完成: {DEFAULT_DB_PATH}")

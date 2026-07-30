@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="icon" href="data:,">
+  <title>登录 · A股个人研究台</title>
+  <link rel="stylesheet" href="{{ url_for('static', path='/app.css') }}">
+</head>
+<body class="login-body">
+  <main class="login-shell">
+    <section class="login-copy"><p class="eyebrow">PRIVATE RESEARCH CONSOLE</p><h1>把市场噪声，变成今天的研究清单。</h1><p>可解释候选、自助筛选、持仓风险，只为一个人的决策流程服务。</p></section>
+    <section class="login-card">
+      <div><h2>登录研究台</h2><p>登录一次，可在这台设备上保持 30 天。</p></div>
+      {% if error %}<p class="form-error">{{ error }}</p>{% endif %}
+      <form method="post" action="/login" class="login-form">
+        <input type="hidden" name="next" value="{{ next_path }}">
+        <label>用户名<input name="username" autocomplete="username" required autofocus></label>
+        <label>密码<input type="password" name="password" autocomplete="current-password" required></label>
+        <label class="check-row"><input type="checkbox" name="remember" value="yes" checked><span>30 天内保持登录</span></label>
+        <button class="primary-button" type="submit">进入研究台</button>
+      </form>
+      <small>会话仅保存在当前浏览器；系统不连接券商、不执行交易。</small>
+    </section>
+  </main>
+</body>
+</html>

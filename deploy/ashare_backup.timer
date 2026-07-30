@@ -1,0 +1,11 @@
+[Unit]
+Description=每日备份 A股监控数据库
+
+[Timer]
+OnCalendar=*-*-* 03:20:00 Asia/Shanghai
+Persistent=true
+RandomizedDelaySec=15m
+Unit=ashare_backup.service
+
+[Install]
+WantedBy=timers.target

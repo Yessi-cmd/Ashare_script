@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="hero compact"><div><p class="eyebrow">REPRODUCIBLE SCREENER</p><h1>自助选股</h1><p>组合条件后直接收藏当前 URL，下次可复现同一规则。</p></div></section>
+
+<section class="panel filter-panel">
+  <form method="get" action="/screener" class="filter-form">
+    <label>最低评分<input type="number" name="min_score" min="0" max="100" value="{{ data.filters.min_score }}"></label>
+    <label>最低 20 日动量（%）<input type="number" name="min_momentum" min="-100" max="100" step="0.5" value="{{ data.filters.min_momentum }}"></label>
+    <label>最大年化波动（%）<input type="number" name="max_volatility" min="0" max="300" step="1" value="{{ data.filters.max_volatility }}"></label>
+    <label>显示数量<input type="number" name="limit" min="1" max="50" value="{{ data.filters.limit }}"></label>
+    <label class="check-row filter-check"><input type="checkbox" name="above_ma20" value="true" {% if data.filters.above_ma20 %}checked{% endif %}><span>只看站上 MA20</span></label>
+    <button class="primary-button" type="submit">应用筛选</button>
+  </form>
+</section>
+
+<section class="panel">
+  <div class="section-title"><div><h2>筛选结果</h2><p>{{ data.match_count }} 只满足条件，当前显示 {{ data.candidates|length }} 只</p></div><span>数据日 {{ data.as_of or '—' }}</span></div>
+  <div class="table-wrap"><table class="screener-table">
+    <thead><tr><th>股票</th><th>状态</th><th>评分</th><th>20日动量</th><th>MA20</th><th>量比</th><th>年化波动</th><th>失效位</th></tr></thead>
+    <tbody>{% for row in data.candidates %}<tr>
+      <td><a href="/stocks/{{ row.code }}"><strong>{{ row.name }}</strong><small>{{ row.code }}</small></a></td>
+      <td><span class="pill label-{{ row.label }}">{{ row.label }}</span></td><td><span class="score">{{ row.score }}</span></td>
+      <td class="{{ 'up' if row.momentum_20 >= 0 else 'down' }}">{{ '%+.1f'|format(row.momentum_20) }}%</td>
+      <td>{{ '站上' if row.above_ma20 else '下方' }}</td><td>{{ '%.2f'|format(row.volume_ratio) }}×</td><td>{{ '%.1f'|format(row.volatility) }}%</td><td>¥{{ '%.2f'|format(row.invalidation_price) }}</td>
+    </tr>{% else %}<tr><td colspan="8" class="empty">没有股票满足当前条件，请适当放宽筛选。</td></tr>{% endfor %}</tbody>
+  </table></div>
+</section>
+<p class="scope-note">当前仅筛选固定 {{ data.universe_size }} 股研究样本，不是全 A 股扫描；所有结果来自本地 SQLite。</p>
+{% endblock %}

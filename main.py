@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """
 A股监控系统 - 主控程序
-一键启动所有功能：股票监控 + Telegram Bot
+一键启动所有功能：股票监控 + 跨市场行情 + Telegram Bot
 
 用法:
     python main.py              # 启动所有服务
     python main.py --monitor    # 仅启动监控
+    python main.py --markets    # 仅启动跨市场行情采集
     python main.py --bot        # 仅启动 Bot
     python main.py --test       # 测试模式
 """
@@ -15,9 +16,11 @@ import subprocess
 import time
 import signal
 import os
+import threading
 
 # 全局进程列表
 processes = []
+log_handles = []
 shutdown_in_progress = False
 
 
@@ -54,25 +57,42 @@ def stop_all_services():
                 print(f"   • {name} 已退出")
         except Exception as e:
             print(f"   ! {name} 停止失败: {e}")
+    for handle in log_handles:
+        try:
+            handle.close()
+        except Exception:
+            pass
+    log_handles.clear()
 
 
-def start_service(name, script, args=None):
+def start_service(name, script, args=None, log_file=None):
     """启动一个服务"""
     cmd = [sys.executable, script]
     if args:
         cmd.extend(args)
     
     try:
-        # 简化版本：直接启动子进程
-        proc = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            bufsize=1,
-            universal_newlines=True
-        )
+        if log_file:
+            # 输出重定向到日志文件（避免管道缓冲区写满导致进程阻塞）
+            fh = open(log_file, "a", encoding="utf-8")
+            log_handles.append(fh)
+            proc = subprocess.Popen(
+                cmd,
+                stdout=fh,
+                stderr=subprocess.STDOUT,
+            )
+        else:
+            # 管道模式（调用方需要读取 proc.stdout）
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                bufsize=1,
+                universal_newlines=True
+            )
         processes.append((name, proc))
-        print(f"   ✓ {name} 已启动 (PID: {proc.pid})")
+        log_info = f" → {log_file}" if log_file else ""
+        print(f"   ✓ {name} 已启动 (PID: {proc.pid}){log_info}")
         return proc
     except Exception as e:
         print(f"   ✗ {name} 启动失败: {e}")
@@ -80,8 +100,9 @@ def start_service(name, script, args=None):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="A股监控系统主控程序")
+    parser = argparse.ArgumentParser(description="A股与跨市场监控系统主控程序")
     parser.add_argument("--monitor", action="store_true", help="仅启动监控")
+    parser.add_argument("--markets", action="store_true", help="仅启动跨市场行情采集")
     parser.add_argument("--bot", action="store_true", help="仅启动 Bot")
     parser.add_argument("--test", action="store_true", help="测试模式")
     args = parser.parse_args()
@@ -97,18 +118,30 @@ def main():
     print()
 
     # 根据参数启动服务
-    if args.bot or (not args.monitor and not args.test):
+    run_monitor = args.monitor or args.test or (not args.bot and not args.markets)
+    run_markets = args.markets or args.monitor or args.test or (
+        not args.bot and not args.markets
+    )
+
+    if args.bot or (not args.monitor and not args.test and not args.markets):
         print("🤖 启动 Telegram Bot...")
-        bot_proc = start_service("Telegram Bot", "bot.py")
+        bot_proc = start_service("Telegram Bot", "bot.py", log_file="bot.log")
         if bot_proc:
             time.sleep(2)  # 等待 Bot 初始化
 
-    if args.monitor or args.test or (not args.bot):
+    if run_monitor:
         print("📊 启动股票监控...")
         monitor_args = ["--test"] if args.test else []
         monitor_proc = start_service("股票监控", "monitor.py", monitor_args)
     else:
         monitor_proc = None
+
+    if run_markets:
+        print("🌏 启动跨市场行情采集...")
+        market_args = ["--test"] if args.test else []
+        market_proc = start_service("全球市场监控", "market_monitor.py", market_args)
+    else:
+        market_proc = None
 
     if not processes:
         print("\n❌ 没有服务启动成功")
@@ -126,37 +159,38 @@ def main():
     print("   - 日志保存在 monitor.log 和 bot.log")
     print()
 
-    # 实时输出监控日志（如果有）
-    if monitor_proc:
-        try:
-            for line in monitor_proc.stdout:
+    # 在后台转发监控输出，主线程统一监督所有子进程。
+    def forward_output(proc):
+        if proc and proc.stdout:
+            for line in proc.stdout:
                 print(line, end='')
                 sys.stdout.flush()
-        except KeyboardInterrupt:
-            print("\n")  # 换行
-        except Exception as e:
-            print(f"\n读取日志出错: {e}")
 
-    # 保持运行（如果只启动了 Bot）
-    elif processes:
-        try:
-            print("按 Ctrl+C 停止服务...\n")
-            while True:
-                time.sleep(1)
-                # 检查进程是否还在运行
-                all_running = True
-                for name, proc in processes:
-                    if proc.poll() is not None:
-                        print(f"\n⚠️  {name} 意外退出 (退出码: {proc.returncode})")
-                        all_running = False
+    for proc in (monitor_proc, market_proc):
+        if proc:
+            threading.Thread(target=forward_output, args=(proc,), daemon=True).start()
+
+    try:
+        while True:
+            time.sleep(1)
+            exited = [(name, proc) for name, proc in processes if proc.poll() is not None]
+            if not exited:
+                continue
+            name, proc = exited[0]
+            if args.test:
+                test_processes = [
+                    child for child_name, child in processes
+                    if child_name in {"股票监控", "全球市场监控"}
+                ]
+                if test_processes and all(child.poll() is not None for child in test_processes):
+                    if all(child.returncode == 0 for child in test_processes):
+                        print("\n✅ 测试运行完成")
                         break
-                
-                if not all_running:
-                    stop_all_services()
-                    sys.exit(1)
-                    
-        except KeyboardInterrupt:
-            print("\n")  # 换行
+            print(f"\n⚠️  {name} 意外退出 (退出码: {proc.returncode})")
+            stop_all_services()
+            sys.exit(proc.returncode or 1)
+    except KeyboardInterrupt:
+        print("\n")
 
     # 确保清理
     if not shutdown_in_progress:
