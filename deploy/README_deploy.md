@@ -63,7 +63,7 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now ashare_web
 sudo systemctl enable --now ashare_sync.timer ashare_backup.timer
 
-# 独立于 A股交易时段采集全球基准指数
+# 独立于 A股交易时段采集 A股与全球基准指数
 sudo systemctl enable --now ashare_market_monitor
 
 # 股票池配置并通过 monitor.py --test 后再启用监控

@@ -42,6 +42,24 @@ class SettingsTests(unittest.TestCase):
         }
         self.assertIs(validate_config(config), config)
 
+    def test_a_share_index_configuration_is_validated(self):
+        config = {
+            "global_markets": {
+                "markets": {
+                    "a_share": {
+                        "indices": [
+                            {
+                                "symbol": "000001.SS",
+                                "name": "上证指数",
+                                "local_code": "000001",
+                            }
+                        ]
+                    }
+                }
+            }
+        }
+        self.assertIs(validate_config(config), config)
+
     def test_unknown_global_market_is_rejected(self):
         with self.assertRaises(ConfigError):
             validate_config({"global_markets": {"markets": {"xx": {}}}})

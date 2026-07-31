@@ -6,13 +6,13 @@ this module and is used only by ``market_monitor.py``.
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 import logging
 import math
 from typing import Callable, Iterable, Optional
 from urllib.parse import quote
-from zoneinfo import ZoneInfo
 
 import requests
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
@@ -21,7 +21,6 @@ from database import MarketQuoteSnapshot, get_db, init_db
 
 logger = logging.getLogger(__name__)
 
-SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
 YAHOO_CHART_BASE_URL = "https://query1.finance.yahoo.com/v8/finance/chart"
 YAHOO_SOURCE = "yahoo_chart"
 DEFAULT_POLL_INTERVAL_SECONDS = 300.0
@@ -38,6 +37,7 @@ class MarketIndexDefinition:
     name: str
     currency: str
     timezone: str
+    local_code: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -106,6 +106,48 @@ DEFAULT_MARKET_DEFINITIONS = (
     ),
 )
 
+# A-share benchmarks are kept separate from the global-market page, but use
+# the same collector and local snapshot table.  ``local_code`` aligns the
+# Yahoo symbol with raw index bars stored by ``sync_universe.py``.
+DEFAULT_A_SHARE_DEFINITIONS = (
+    MarketIndexDefinition(
+        market="a_share",
+        market_name="A股",
+        symbol="000001.SS",
+        name="上证指数",
+        currency="CNY",
+        timezone="Asia/Shanghai",
+        local_code="000001",
+    ),
+    MarketIndexDefinition(
+        market="a_share",
+        market_name="A股",
+        symbol="399001.SZ",
+        name="深证成指",
+        currency="CNY",
+        timezone="Asia/Shanghai",
+        local_code="399001",
+    ),
+    MarketIndexDefinition(
+        market="a_share",
+        market_name="A股",
+        symbol="399006.SZ",
+        name="创业板指",
+        currency="CNY",
+        timezone="Asia/Shanghai",
+        local_code="399006",
+    ),
+    MarketIndexDefinition(
+        market="a_share",
+        market_name="A股",
+        symbol="000300.SS",
+        name="沪深 300",
+        currency="CNY",
+        timezone="Asia/Shanghai",
+        local_code="000300",
+    ),
+)
+
 
 def global_markets_enabled(config: dict | None) -> bool:
     """Return whether the cross-market collector and page are enabled.
@@ -127,15 +169,28 @@ def _market_overrides(config: dict | None) -> dict:
     return overrides if isinstance(overrides, dict) else {}
 
 
-def market_definitions(config: dict | None = None) -> tuple[MarketIndexDefinition, ...]:
-    """Resolve built-in benchmark definitions with optional YAML overrides."""
+def market_definitions(
+    config: dict | None = None,
+    *,
+    include_a_share: bool = False,
+) -> tuple[MarketIndexDefinition, ...]:
+    """Resolve benchmark definitions with optional YAML overrides.
+
+    The public global-market page intentionally remains focused on overseas
+    benchmarks.  The independent collector passes ``include_a_share=True``
+    so the home page can show A-share context through the same local-first
+    persistence path.
+    """
 
     if not global_markets_enabled(config):
         return ()
 
     overrides = _market_overrides(config)
+    defaults_to_resolve = DEFAULT_MARKET_DEFINITIONS + (
+        DEFAULT_A_SHARE_DEFINITIONS if include_a_share else ()
+    )
     grouped_defaults: dict[str, list[MarketIndexDefinition]] = {}
-    for default in DEFAULT_MARKET_DEFINITIONS:
+    for default in defaults_to_resolve:
         grouped_defaults.setdefault(default.market, []).append(default)
 
     resolved: list[MarketIndexDefinition] = []
@@ -172,6 +227,11 @@ def market_definitions(config: dict | None = None) -> tuple[MarketIndexDefinitio
                     timezone=str(
                         spec.get("timezone", market_config.get("timezone", default.timezone))
                     ),
+                    local_code=(
+                        str(spec["local_code"]).zfill(6)
+                        if spec.get("local_code")
+                        else default.local_code
+                    ),
                 )
             )
     return tuple(resolved)
@@ -205,12 +265,13 @@ def _number(value) -> Optional[float]:
     return number if math.isfinite(number) else None
 
 
-def _market_datetime(timestamp, timezone: str) -> Optional[datetime]:
+def _utc_datetime(timestamp) -> Optional[datetime]:
+    """Convert an epoch timestamp to naive UTC for unambiguous storage."""
     if timestamp in (None, ""):
         return None
     try:
         return datetime.fromtimestamp(
-            float(timestamp), tz=ZoneInfo(timezone)
+            float(timestamp), tz=timezone.utc
         ).replace(tzinfo=None)
     except (TypeError, ValueError, OSError):
         return None
@@ -269,8 +330,8 @@ def parse_yahoo_chart_payload(
         price=price,
         change_pct=change_pct,
         currency=definition.currency,
-        quote_at=quote_at or datetime.now(SHANGHAI_TZ).replace(tzinfo=None),
-        market_at=_market_datetime(market_timestamp, definition.timezone),
+        quote_at=quote_at or datetime.now(timezone.utc).replace(tzinfo=None),
+        market_at=_utc_datetime(market_timestamp),
     )
 
 
@@ -279,31 +340,43 @@ def fetch_market_quotes(
     timeout: float = DEFAULT_REQUEST_TIMEOUT_SECONDS,
     http_get: Optional[Callable] = None,
 ) -> tuple[list[MarketQuote], list[str]]:
-    """Fetch each index independently and return successful quotes/errors."""
+    """Fetch each index independently in parallel; return quotes/errors."""
 
     request = http_get or requests.get
     quotes: list[MarketQuote] = []
     errors: list[str] = []
     headers = {"User-Agent": "AshareMonitor/2.0 (+local dashboard)"}
-    for definition in definitions:
+
+    def fetch_one(definition: MarketIndexDefinition) -> MarketQuote:
         url = f"{YAHOO_CHART_BASE_URL}/{quote(definition.symbol, safe='')}"
-        try:
-            response = request(
-                url,
-                params={
-                    "range": "1d",
-                    "interval": "1m",
-                    "includePrePost": "true",
-                },
-                headers=headers,
-                timeout=timeout,
-            )
-            raise_for_status = getattr(response, "raise_for_status", None)
-            if raise_for_status is not None:
-                raise_for_status()
-            quotes.append(parse_yahoo_chart_payload(response.json(), definition))
-        except Exception as exc:
-            errors.append(f"{definition.market_name} {definition.name}({definition.symbol}): {exc}")
+        response = request(
+            url,
+            params={
+                "range": "1d",
+                "interval": "1m",
+                "includePrePost": "true",
+            },
+            headers=headers,
+            timeout=timeout,
+        )
+        raise_for_status = getattr(response, "raise_for_status", None)
+        if raise_for_status is not None:
+            raise_for_status()
+        return parse_yahoo_chart_payload(response.json(), definition)
+
+    definitions = list(definitions)
+    with ThreadPoolExecutor(
+        max_workers=max(1, min(len(definitions), 8))
+    ) as executor:
+        futures = [executor.submit(fetch_one, definition) for definition in definitions]
+        for definition, future in zip(definitions, futures):
+            try:
+                quotes.append(future.result())
+            except Exception as exc:
+                errors.append(
+                    f"{definition.market_name} {definition.name}"
+                    f"({definition.symbol}): {exc}"
+                )
     return quotes, errors
 
 

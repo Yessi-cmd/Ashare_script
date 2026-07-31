@@ -5,21 +5,43 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <link rel="icon" href="data:,">
   <title>{{ title }} · 个人研究台</title>
-  <link rel="stylesheet" href="{{ url_for('static', path='/app.css') }}">
+  <script>
+    (() => {
+      try {
+        const saved = localStorage.getItem('ashare-theme');
+        const preferred = window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+        document.documentElement.dataset.theme = saved || preferred;
+      } catch (_) {
+        document.documentElement.dataset.theme = 'dark';
+      }
+    })();
+  </script>
+  <link rel="stylesheet" href="{{ url_for('static', path='/app.css') }}?v=13">
 </head>
-<body>
+<body data-page="{{ request.url.path }}">
+  <a class="skip-link" href="#main-content">跳到主要内容</a>
   <header class="topbar">
-    <a class="brand" href="/">个人研究台</a>
-    <nav>
-      <a href="/">今日</a>
-      <a href="/markets">全球市场</a>
-      <a href="/recommendations">荐股研究</a>
-      <a href="/screener">自助选股</a>
-      <a href="/system">系统</a>
-      <form action="/logout" method="post"><button class="nav-button" type="submit">退出</button></form>
-    </nav>
+    <div class="topbar-inner">
+      <a class="brand" href="/" aria-label="返回今日研究台">
+        <span class="brand-mark" aria-hidden="true">研</span>
+        <span class="brand-copy"><strong>个人研究台</strong><small>ASHARE · LAB</small></span>
+      </a>
+      <nav class="primary-nav" aria-label="主导航">
+        {% set current_path = request.url.path %}
+        <a class="nav-link {{ 'is-active' if current_path == '/' or current_path.startswith('/stocks/') else '' }}" href="/" {% if current_path == '/' or current_path.startswith('/stocks/') %}aria-current="page"{% endif %}><span class="nav-glyph" aria-hidden="true">⌂</span><span>今日</span></a>
+        <a class="nav-link {{ 'is-active' if current_path == '/markets' else '' }}" href="/markets" {% if current_path == '/markets' %}aria-current="page"{% endif %}><span class="nav-glyph" aria-hidden="true">◌</span><span>全球市场</span></a>
+        <a class="nav-link {{ 'is-active' if current_path == '/recommendations' else '' }}" href="/recommendations" {% if current_path == '/recommendations' %}aria-current="page"{% endif %}><span class="nav-glyph" aria-hidden="true">✦</span><span>荐股研究</span></a>
+        <a class="nav-link {{ 'is-active' if current_path == '/screener' else '' }}" href="/screener" {% if current_path == '/screener' %}aria-current="page"{% endif %}><span class="nav-glyph" aria-hidden="true">⌕</span><span>自助选股</span></a>
+        <a class="nav-link {{ 'is-active' if current_path == '/system' else '' }}" href="/system" {% if current_path == '/system' %}aria-current="page"{% endif %}><span class="nav-glyph" aria-hidden="true">◈</span><span>系统</span></a>
+      </nav>
+      <div class="topbar-actions">
+        <button class="icon-button theme-toggle" type="button" data-theme-toggle aria-label="切换主题" aria-pressed="false"><span class="theme-symbol" aria-hidden="true">☾</span><span class="sr-only">切换主题</span></button>
+        <form action="/logout" method="post"><button class="nav-button" type="submit">退出</button></form>
+      </div>
+    </div>
   </header>
-  <main>{% block content %}{% endblock %}</main>
-  <footer>只读研究界面 · 不构成投资建议</footer>
+  <main id="main-content">{% block content %}{% endblock %}</main>
+  <footer><span class="footer-dot" aria-hidden="true"></span><span>只读研究界面</span><span>·</span><span>不构成投资建议</span><span class="footer-separator">·</span><span>数据来自本地快照</span></footer>
+  <script src="{{ url_for('static', path='/app.js') }}?v=13" defer></script>
 </body>
 </html>

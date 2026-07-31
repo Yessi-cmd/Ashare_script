@@ -1,5 +1,5 @@
 import unittest
-from datetime import datetime
+from datetime import datetime, timezone
 from unittest.mock import patch
 
 from sqlalchemy import create_engine
@@ -7,6 +7,7 @@ from sqlalchemy.orm import sessionmaker
 
 from database import Base, MarketQuoteSnapshot
 from global_market_data import (
+    DEFAULT_A_SHARE_DEFINITIONS,
     DEFAULT_MARKET_DEFINITIONS,
     MarketQuote,
     fetch_market_quotes,
@@ -65,7 +66,18 @@ class GlobalMarketDataTests(unittest.TestCase):
         self.assertEqual(len(us), 1)
         self.assertEqual(us[0].symbol, "^NDX")
 
-    def test_parse_uses_previous_close_and_local_market_time(self):
+    def test_a_share_definitions_align_yahoo_symbols_with_local_codes(self):
+        definitions = market_definitions({}, include_a_share=True)
+        a_share = [item for item in definitions if item.market == "a_share"]
+        self.assertEqual(len(a_share), 4)
+        self.assertEqual(
+            [(item.symbol, item.local_code) for item in a_share],
+            [("000001.SS", "000001"), ("399001.SZ", "399001"),
+             ("399006.SZ", "399006"), ("000300.SS", "000300")],
+        )
+        self.assertEqual(DEFAULT_A_SHARE_DEFINITIONS[-1].local_code, "000300")
+
+    def test_parse_uses_previous_close_and_stores_utc_market_time(self):
         definition = DEFAULT_MARKET_DEFINITIONS[0]
         quote = parse_yahoo_chart_payload(
             yahoo_payload(price=18_500, previous_close=18_000),
@@ -74,7 +86,10 @@ class GlobalMarketDataTests(unittest.TestCase):
         )
         self.assertAlmostEqual(quote.change_pct, 2.777777, places=4)
         self.assertEqual(quote.quote_at, datetime(2026, 7, 30, 12, 0))
-        self.assertIsNotNone(quote.market_at)
+        self.assertEqual(
+            quote.market_at,
+            datetime.fromtimestamp(1785000000, tz=timezone.utc).replace(tzinfo=None),
+        )
 
     def test_parse_falls_back_to_chart_close_and_chart_previous_close(self):
         definition = DEFAULT_MARKET_DEFINITIONS[0]

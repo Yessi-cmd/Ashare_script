@@ -5,23 +5,44 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <link rel="icon" href="data:,">
   <title>登录 · A股个人研究台</title>
-  <link rel="stylesheet" href="{{ url_for('static', path='/app.css') }}">
+  <script>
+    (() => {
+      try {
+        const saved = localStorage.getItem('ashare-theme');
+        const preferred = window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+        document.documentElement.dataset.theme = saved || preferred;
+      } catch (_) {
+        document.documentElement.dataset.theme = 'dark';
+      }
+    })();
+  </script>
+  <link rel="stylesheet" href="{{ url_for('static', path='/app.css') }}?v=13">
 </head>
 <body class="login-body">
+  <button class="icon-button login-theme-toggle theme-toggle" type="button" data-theme-toggle aria-label="切换主题" aria-pressed="false"><span class="theme-symbol" aria-hidden="true">☾</span><span class="sr-only">切换主题</span></button>
   <main class="login-shell">
-    <section class="login-copy"><p class="eyebrow">PRIVATE RESEARCH CONSOLE</p><h1>把市场噪声，变成今天的研究清单。</h1><p>可解释候选、自助筛选、持仓风险，只为一个人的决策流程服务。</p></section>
+    <section class="login-copy">
+      <a class="brand login-brand" href="/" aria-label="个人研究台"><span class="brand-mark" aria-hidden="true">研</span><span class="brand-copy"><strong>个人研究台</strong><small>ASHARE · LAB</small></span></a>
+      <p class="eyebrow">PRIVATE RESEARCH CONSOLE</p>
+      <h1>把市场噪声，<br><em>变成今天的研究清单。</em></h1>
+      <p class="login-lede">可解释候选、自助筛选、持仓风险，只为一个人的决策流程服务。</p>
+      <div class="login-highlights" aria-label="研究台能力">
+        <span><b>01</b> 本地快照</span><span><b>02</b> 因子解释</span><span><b>03</b> 风险边界</span>
+      </div>
+    </section>
     <section class="login-card">
-      <div><h2>登录研究台</h2><p>登录一次，可在这台设备上保持 30 天。</p></div>
+      <div class="login-card-heading"><span class="status-orb" aria-hidden="true"></span><div><h2>登录研究台</h2><p>欢迎回来，继续今天的研究。</p></div></div>
       {% if error %}<p class="form-error">{{ error }}</p>{% endif %}
       <form method="post" action="/login" class="login-form">
         <input type="hidden" name="next" value="{{ next_path }}">
-        <label>用户名<input name="username" autocomplete="username" required autofocus></label>
-        <label>密码<input type="password" name="password" autocomplete="current-password" required></label>
+        <label>用户名<input name="username" autocomplete="username" placeholder="输入用户名" required autofocus></label>
+        <label>密码<input type="password" name="password" autocomplete="current-password" placeholder="输入密码" required></label>
         <label class="check-row"><input type="checkbox" name="remember" value="yes" checked><span>30 天内保持登录</span></label>
-        <button class="primary-button" type="submit">进入研究台</button>
+        <button class="primary-button primary-button-wide" type="submit"><span>进入研究台</span><span aria-hidden="true">→</span></button>
       </form>
-      <small>会话仅保存在当前浏览器；系统不连接券商、不执行交易。</small>
+      <small class="login-footnote"><span class="lock-icon" aria-hidden="true">⌁</span> 会话仅保存在当前浏览器；系统不连接券商、不执行交易。</small>
     </section>
   </main>
+  <script src="{{ url_for('static', path='/app.js') }}?v=13" defer></script>
 </body>
 </html>

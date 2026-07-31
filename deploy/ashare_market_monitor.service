@@ -1,5 +1,5 @@
 [Unit]
-Description=港股韩国美股日本行情采集器
+Description=A股与全球基准指数行情采集器
 Wants=network-online.target
 After=network-online.target
 

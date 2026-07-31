@@ -2,16 +2,21 @@
 {% block content %}
 <section class="hero compact">
   <div><p class="eyebrow">{{ stock.code }}</p><h1>{{ stock.name }}</h1><p>{{ stock.snapshot.reason if stock.snapshot else '暂无实时评分快照' }}</p></div>
-  {% if stock.snapshot %}<div class="price"><strong>{{ '%.2f'|format(stock.snapshot.price) }}</strong><span class="{{ 'up' if stock.snapshot.change_pct >= 0 else 'down' }}">{{ '%+.2f'|format(stock.snapshot.change_pct) }}%</span><small>V2 评分 {{ stock.snapshot.score if stock.snapshot.score is not none else '—' }}</small></div>{% endif %}
+  {% if stock.snapshot %}<div class="price"><strong>{{ '%.2f'|format(stock.snapshot.price) }}</strong><span class="{{ 'up' if stock.snapshot.change_pct is not none and stock.snapshot.change_pct >= 0 else 'down' }}">{{ '%+.2f'|format(stock.snapshot.change_pct) if stock.snapshot.change_pct is not none else '—' }}{% if stock.snapshot.change_pct is not none %}%{% endif %}</span><small>V2 评分 {{ stock.snapshot.score if stock.snapshot.score is not none else '—' }}</small></div>{% endif %}
 </section>
-<section class="panel"><div class="section-title"><h2>本地日线</h2><span>最近 180 根 · 前复权</span></div><div id="chart" class="chart"><p class="empty">正在加载本地数据…</p></div></section>
+<section class="panel chart-panel"><div class="section-title"><div><h2>本地日线</h2><p>价格与成交量 · 数据来自 SQLite</p></div><span>最近 180 根 · 前复权</span></div><div id="chart" class="chart" aria-label="{{ stock.name }}本地日线图"><p class="chart-loading">正在加载本地数据…</p></div><p class="chart-caption">图表仅用于研究回看，不构成买卖建议。拖动或滚轮可缩放时间范围。</p></section>
 <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
 <script>
 fetch('/api/stocks/{{ stock.code }}/bars?limit=180').then(r => r.json()).then(data => {
   const el = document.getElementById('chart');
   if (!data.bars.length || typeof echarts === 'undefined') { el.innerHTML = '<p class="empty">暂无日线数据或图表组件未加载</p>'; return; }
   const chart = echarts.init(el); const bars = data.bars;
-  chart.setOption({animation:false, tooltip:{trigger:'axis'}, grid:[{left:48,right:18,top:28,height:'62%'},{left:48,right:18,top:'76%',height:'16%'}], xAxis:[{type:'category',data:bars.map(x=>x.date),boundaryGap:true,axisLabel:{color:'#8290a3'}},{type:'category',gridIndex:1,data:bars.map(x=>x.date),axisLabel:{show:false}}], yAxis:[{scale:true,axisLabel:{color:'#8290a3'},splitLine:{lineStyle:{color:'#263143'}}},{gridIndex:1,axisLabel:{show:false},splitLine:{show:false}}], dataZoom:[{type:'inside',xAxisIndex:[0,1],start:45,end:100}], series:[{type:'candlestick',data:bars.map(x=>[x.open,x.close,x.low,x.high]),itemStyle:{color:'#ee5d6c',color0:'#37c997',borderColor:'#ee5d6c',borderColor0:'#37c997'}},{type:'bar',xAxisIndex:1,yAxisIndex:1,data:bars.map(x=>x.volume),itemStyle:{color:'#50627a'}}]});
+  const styles = getComputedStyle(document.documentElement);
+  const muted = styles.getPropertyValue('--muted').trim() || '#8290a3';
+  const line = styles.getPropertyValue('--line').trim() || '#263143';
+  const positive = styles.getPropertyValue('--positive').trim() || '#ee5d6c';
+  const negative = styles.getPropertyValue('--negative').trim() || '#37c997';
+  chart.setOption({animation:false, backgroundColor:'transparent', tooltip:{trigger:'axis',confine:true}, grid:[{left:48,right:18,top:28,height:'62%'},{left:48,right:18,top:'76%',height:'16%'}], xAxis:[{type:'category',data:bars.map(x=>x.date),boundaryGap:true,axisLabel:{color:muted}},{type:'category',gridIndex:1,data:bars.map(x=>x.date),axisLabel:{show:false}}], yAxis:[{scale:true,axisLabel:{color:muted},splitLine:{lineStyle:{color:line}}},{gridIndex:1,axisLabel:{show:false},splitLine:{show:false}}], dataZoom:[{type:'inside',xAxisIndex:[0,1],start:45,end:100}], series:[{type:'candlestick',data:bars.map(x=>[x.open,x.close,x.low,x.high]),itemStyle:{color:positive,color0:negative,borderColor:positive,borderColor0:negative}},{type:'bar',xAxisIndex:1,yAxisIndex:1,data:bars.map(x=>x.volume),itemStyle:{color:muted,opacity:.45}}]});
   addEventListener('resize',()=>chart.resize());
 }).catch(()=>{document.getElementById('chart').innerHTML='<p class="empty">本地日线加载失败</p>'});
 </script>

@@ -27,6 +27,11 @@
 | 6 | [个人荐股与自助选股台](06-personal-research-console.md) | COMPLETE | 长期会话、可解释荐股榜、自助选股器 |
 | 7 | [个人决策反馈闭环](07-personal-feedback-loop.md) | PLANNED | 建议记忆、决策日志、持仓感知、个人校准与反事实复盘 |
 | 8 | [多市场行情面板](08-multi-market-dashboard.md) | COMPLETE | 港股、韩国、美股、日本基准指数的本地快照与只读面板 |
+| 9 | [今日指数与趋势面板](09-index-trend-dashboard.md) | COMPLETE | A股核心指数、近期趋势与首页行动台 |
+| 10 | [首页信息密度与层级修正](10-homepage-information-density.md) | COMPLETE | 紧凑首屏、候选优先、指数行情带 |
+| 11 | [研究台 UI 全面优化](11-ui-polish.md) | COMPLETE | 统一壳层、主题、响应式与页面层级 |
+| 12 | [荐股榜密度与扫描效率](12-recommendation-board-density.md) | COMPLETE | 单行榜单、横向比较、移动端堆叠 |
+| 13 | [移动端布局紧凑度与走势线修复](13-mobile-layout-compactness.md) | COMPLETE | 紧凑表单/头部/登录页、24px 走势线 |
 
 ## 通用完成标准
 

@@ -71,7 +71,7 @@ def validate_config(config: Any) -> dict:
     configured_markets = global_markets.get("markets", {}) or {}
     if not isinstance(configured_markets, dict):
         raise ConfigError("global_markets.markets 必须是 YAML 对象")
-    supported_markets = {"hk", "kr", "us", "jp"}
+    supported_markets = {"a_share", "hk", "kr", "us", "jp"}
     for market_key, market_config in configured_markets.items():
         if market_key not in supported_markets:
             raise ConfigError(f"global_markets.markets 不支持市场: {market_key}")

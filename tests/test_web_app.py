@@ -15,6 +15,27 @@ EMPTY_RECOMMENDATIONS = {
     "eligible_size": 0,
     "model": "test",
 }
+SAMPLE_RECOMMENDATIONS = {
+    "as_of": "2026-07-30",
+    "candidates": [{
+        "code": "600519",
+        "name": "贵州茅台",
+        "label": "进入观察",
+        "score": 68,
+        "close": 1253.0,
+        "momentum_20": 5.6,
+        "volatility": 22.0,
+        "drawdown_60": -12.1,
+        "reasons": ["V2 技术评分 68 分", "收盘价站上 20 日均线"],
+        "objections": ["近期量能没有明显放大"],
+        "invalidation_price": 1168.63,
+        "is_portfolio": True,
+        "is_watchlist": False,
+    }],
+    "universe_size": 19,
+    "eligible_size": 1,
+    "model": "test",
+}
 EMPTY_OVERVIEW = {
     "portfolio": [],
     "watchlist": [],
@@ -56,6 +77,32 @@ FULL_MARKETS = {
     "stale_after_seconds": 900,
     "source": "Yahoo Finance Chart API",
 }
+OVERVIEW_WITH_INDEX_TAPE = {
+    **EMPTY_OVERVIEW,
+    "latest_quote_at": "2026-07-30 15:00:00",
+    "a_share": {
+        "as_of": "2026-07-30",
+        "latest_quote_at": "2026-07-30 15:00:00",
+        "summary": {
+            "label": "偏弱",
+            "class": "weak",
+            "description": "0/4 个指数位于 20 日均线上方",
+        },
+        "indices": [{
+            "name": "上证指数",
+            "local_code": "000001",
+            "data_status": "实时",
+            "trend_class": "weak",
+            "trend_label": "偏弱",
+            "ma20_label": "低于 MA20",
+            "price": 3804.69,
+            "change_pct": -0.23,
+            "change_20": -5.56,
+            "sparkline": "0,8 90,20 180,46",
+            "has_data": True,
+        }],
+    },
+}
 AUTH_ENV = {
     "ASHARE_WEB_USERNAME": "owner",
     "ASHARE_WEB_PASSWORD": "secret",
@@ -78,9 +125,30 @@ class WebAppTests(unittest.TestCase):
         )
 
     def test_health_check_has_no_sensitive_details(self):
-        response = self.client.get("/healthz")
+        class FakeDb:
+            def query(self, *_args, **_kwargs):
+                return self
+
+            def scalar(self):
+                return 0
+
+            def close(self):
+                return None
+
+        with patch("web_app._config", return_value={}), patch(
+            "web_app.init_db"
+        ), patch("web_app.get_db", return_value=FakeDb()):
+            response = self.client.get("/healthz")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {"status": "ok"})
+
+    def test_health_check_fails_when_database_unavailable(self):
+        with patch("web_app._config", return_value={}), patch(
+            "web_app.init_db", side_effect=RuntimeError("数据库被锁")
+        ):
+            response = self.client.get("/healthz")
+        self.assertEqual(response.status_code, 503)
+        self.assertNotIn("数据库被锁", response.text)
 
     def test_pages_fail_closed_when_session_secret_is_missing(self):
         env = {"ASHARE_WEB_USERNAME": "owner", "ASHARE_WEB_PASSWORD": "secret"}
@@ -126,6 +194,48 @@ class WebAppTests(unittest.TestCase):
         self.assertIn("Max-Age=2592000", logged_in.headers["set-cookie"])
         self.assertEqual(page.status_code, 200)
         self.assertIn("今日重点候选", page.text)
+
+    def test_overview_uses_compact_index_tape_without_hero_slogan(self):
+        with patch.dict("os.environ", AUTH_ENV, clear=True), patch(
+            "web_app._config", return_value={}
+        ), patch("web_app.load_overview", return_value=OVERVIEW_WITH_INDEX_TAPE), patch(
+            "web_app.load_recommendations", return_value=EMPTY_RECOMMENDATIONS
+        ):
+            response = self.client.get("/", auth=("owner", "secret"))
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn("先看机会，再看风险", response.text)
+        self.assertIn("market-tape", response.text)
+        self.assertIn('fill="none"', response.text)
+        self.assertIn("大盘概览", response.text)
+        self.assertIn("data-theme-toggle", response.text)
+        self.assertIn("跳到主要内容", response.text)
+        self.assertIn("/static/app.js?v=13", response.text)
+
+    def test_shared_navigation_marks_current_page_and_login_has_theme_control(self):
+        with patch.dict("os.environ", AUTH_ENV, clear=True), patch(
+            "web_app._config", return_value={}
+        ), patch("web_app.load_market_overview", return_value=EMPTY_MARKETS):
+            page = self.client.get("/markets", auth=("owner", "secret"))
+            login = self.client.get("/login")
+        self.assertEqual(page.status_code, 200)
+        self.assertIn('href="/markets" aria-current="page"', page.text)
+        self.assertEqual(login.status_code, 200)
+        self.assertIn("data-theme-toggle", login.text)
+
+    def test_recommendations_use_dense_ranked_rows(self):
+        with patch.dict("os.environ", AUTH_ENV, clear=True), patch(
+            "web_app._config", return_value={}
+        ), patch(
+            "web_app.load_recommendations", return_value=SAMPLE_RECOMMENDATIONS
+        ):
+            response = self.client.get("/recommendations", auth=("owner", "secret"))
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("recommendation-board", response.text)
+        self.assertIn("recommendation-row", response.text)
+        self.assertIn(">01<", response.text)
+        self.assertIn("贵州茅台", response.text)
+        self.assertIn("为什么入选", response.text)
+        self.assertIn("反对理由", response.text)
 
     def test_tampered_and_expired_cookies_are_rejected(self):
         expired = _make_session_token(

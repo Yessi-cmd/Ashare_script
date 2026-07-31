@@ -2,9 +2,10 @@
 {% block content %}
 <section class="hero compact"><div><p class="eyebrow">LOCAL DATA STATUS</p><h1>系统状态</h1><p>页面只检查本地数据库，不触发外部请求。</p></div></section>
 <section class="metrics system">
-  <article><span>日线记录</span><strong>{{ data.bar_count }}</strong><small>{{ data.stock_count }} 个代码</small></article>
-  <article><span>最新交易日</span><strong>{{ data.latest_bar or '—' }}</strong></article>
+  <article><span>日线记录</span><strong>{{ data.bar_count }}</strong><small>{{ data.stock_count }} 个代码 · 本地缓存</small></article>
+  <article><span>最新交易日</span><strong>{{ data.latest_bar or '—' }}</strong><small>最近一根可用日线</small></article>
   <article><span>行情快照</span><strong>{{ data.snapshot_count }}</strong><small>{{ data.latest_quote or '尚无' }}</small></article>
-  <article><span>数据库大小</span><strong>{{ '%.1f MB'|format(data.database_size / 1048576) if data.database_size else '—' }}</strong></article>
+  <article><span>数据库大小</span><strong>{{ '%.1f MB'|format(data.database_size / 1048576) if data.database_size else '—' }}</strong><small>SQLite · 只读页面</small></article>
 </section>
+<section class="panel system-note"><div class="status-orb" aria-hidden="true"></div><div><h2>数据边界</h2><p>行情采集、评分和通知由独立进程负责；本页面只读取本地快照，因此即使外部行情暂时不可用，也不会阻塞浏览。</p></div></section>
 {% endblock %}

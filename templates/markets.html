@@ -3,21 +3,21 @@
 <section class="hero compact">
   <div><p class="eyebrow">GLOBAL MARKET MONITOR</p><h1>全球市场</h1><p>用基准指数快速了解港股、韩国、美股和日本的风险偏好。</p></div>
   <div class="freshness {{ 'ok' if data.latest_quote_at else 'stale' }}">
-    <span>最新快照 · 上海时间</span><strong>{{ data.latest_quote_at or '尚无数据' }}</strong>
+    <span>最新快照 · 上海时间</span><strong>{{ data.latest_quote_at or '尚无数据' }}</strong><small>仅展示本地采集结果</small>
   </div>
 </section>
 
 <section class="market-notice">
   <strong>数据边界</strong>
   <span>来源：{{ data.source }}。报价可能延迟；页面只读取本地快照，采集失败时不会用旧数据冒充实时数据。</span>
-  {% if not data.enabled %}<span class="pill stale">跨市场采集已停用</span>{% endif %}
+  {% if not data.enabled %}<span class="pill stale">跨市场采集已停用</span>{% else %}<span class="pill ok">本地采集链路正常</span>{% endif %}
 </section>
 
 <section class="market-grid">
   {% for market in data.markets %}
-  <article class="panel market-panel">
+  <article id="{{ market.key }}-market" class="panel market-panel">
     <div class="section-title">
-      <div><h2>{{ market.name }}</h2><p>{{ market.timezone }} · {{ market.currency }}</p></div>
+      <div><h2>{{ market.name }}</h2><p>{{ market.timezone }} · {{ market.currency }} · {{ market.indices|length }} 个基准</p></div>
       <span>{{ market.latest_quote_at or '尚无快照' }}</span>
     </div>
     <div class="market-index-grid">
@@ -25,7 +25,7 @@
       <div class="market-index-card">
         <div class="market-index-head"><div><strong>{{ row.name }}</strong><small>{{ row.symbol }}</small></div><span class="pill {{ 'stale' if not row.snapshot or row.snapshot.stale else 'ok' }}">{{ '过期' if not row.snapshot or row.snapshot.stale else '最新' }}</span></div>
         {% if row.snapshot %}
-        <div class="market-price"><strong>{{ '%.2f'|format(row.snapshot.price) }}</strong><span class="{{ 'up' if row.snapshot.change_pct >= 0 else 'down' }}">{{ '%+.2f'|format(row.snapshot.change_pct) }}%</span></div>
+        <div class="market-price"><strong>{{ '%.2f'|format(row.snapshot.price) }}</strong><span class="{{ 'up' if row.snapshot.change_pct is not none and row.snapshot.change_pct >= 0 else 'down' }}">{{ '%+.2f'|format(row.snapshot.change_pct) if row.snapshot.change_pct is not none else '—' }}{% if row.snapshot.change_pct is not none %}%{% endif %}</span></div>
         <div class="market-meta"><span>市场时间</span><span>{{ row.snapshot.market_at or '—' }}</span></div>
         <div class="market-meta"><span>采集时间</span><span>{{ row.snapshot.quote_at }}</span></div>
         {% else %}

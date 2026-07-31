@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import base64
 import hashlib
@@ -19,6 +20,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from sqlalchemy import func
 
 from dashboard_data import (
     load_overview,
@@ -28,8 +30,11 @@ from dashboard_data import (
     load_stock_summary,
     load_system_status,
 )
+from database import QuoteSnapshot, get_db, init_db
 from market_data import load_daily_bars, normalize_stock_code
 from settings import ConfigError, load_config
+
+logger = logging.getLogger(__name__)
 
 BASE_DIR = Path(__file__).resolve().parent
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
@@ -139,6 +144,20 @@ def _config() -> dict:
 
 @app.get("/healthz")
 def healthz() -> dict:
+    """健康检查：配置可解析且数据库可读时才返回 ok，失败返回 503。"""
+    try:
+        _config()
+        init_db()
+        db = get_db()
+        try:
+            db.query(func.count(QuoteSnapshot.stock_code)).scalar()
+        finally:
+            db.close()
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(f"健康检查失败: {exc}")
+        raise HTTPException(status_code=503, detail="服务不可用") from exc
     return {"status": "ok"}
 
 

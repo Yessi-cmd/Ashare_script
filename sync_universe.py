@@ -15,6 +15,9 @@ from settings import ConfigError, get_owner_user_id, load_config
 from user_config import load_user_config
 
 
+A_SHARE_INDEX_CODES = ("000001", "399001", "399006", "000300")
+
+
 def universe_codes(config: dict) -> list[str]:
     owner_user_id = get_owner_user_id(config)
     if owner_user_id is not None:
@@ -62,16 +65,17 @@ def main() -> int:
         except (MarketDataError, ValueError) as exc:
             logging.error("%s 同步失败: %s", code, exc)
             failures.append(code)
-    try:
-        sync_daily_bars("000300", start, end, "raw", source="index")
-    except (MarketDataError, ValueError) as exc:
-        logging.error("沪深 300 同步失败: %s", exc)
-        failures.append("000300")
+    for code in A_SHARE_INDEX_CODES:
+        try:
+            sync_daily_bars(code, start, end, "raw", source="index")
+        except (MarketDataError, ValueError) as exc:
+            logging.error("A股指数 %s 同步失败: %s", code, exc)
+            failures.append(code)
 
     if failures:
         print(f"❌ 同步完成但有 {len(failures)} 个失败: {', '.join(failures)}")
         return 1
-    print(f"✅ 已同步 {len(codes)} 只个人股票和沪深 300")
+    print(f"✅ 已同步 {len(codes)} 只个人股票和 {len(A_SHARE_INDEX_CODES)} 个 A股指数")
     return 0
 
 

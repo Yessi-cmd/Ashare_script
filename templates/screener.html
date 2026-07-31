@@ -4,10 +4,10 @@
 
 <section class="panel filter-panel">
   <form method="get" action="/screener" class="filter-form">
-    <label>最低评分<input type="number" name="min_score" min="0" max="100" value="{{ data.filters.min_score }}"></label>
-    <label>最低 20 日动量（%）<input type="number" name="min_momentum" min="-100" max="100" step="0.5" value="{{ data.filters.min_momentum }}"></label>
-    <label>最大年化波动（%）<input type="number" name="max_volatility" min="0" max="300" step="1" value="{{ data.filters.max_volatility }}"></label>
-    <label>显示数量<input type="number" name="limit" min="1" max="50" value="{{ data.filters.limit }}"></label>
+    <label for="min-score">最低评分<input id="min-score" type="number" name="min_score" min="0" max="100" value="{{ data.filters.min_score }}"></label>
+    <label for="min-momentum">最低 20 日动量（%）<input id="min-momentum" type="number" name="min_momentum" min="-100" max="100" step="0.5" value="{{ data.filters.min_momentum }}"></label>
+    <label for="max-volatility">最大年化波动（%）<input id="max-volatility" type="number" name="max_volatility" min="0" max="300" step="1" value="{{ data.filters.max_volatility }}"></label>
+    <label for="result-limit">显示数量<input id="result-limit" type="number" name="limit" min="1" max="50" value="{{ data.filters.limit }}"></label>
     <label class="check-row filter-check"><input type="checkbox" name="above_ma20" value="true" {% if data.filters.above_ma20 %}checked{% endif %}><span>只看站上 MA20</span></label>
     <button class="primary-button" type="submit">应用筛选</button>
   </form>
@@ -16,7 +16,7 @@
 <section class="panel">
   <div class="section-title"><div><h2>筛选结果</h2><p>{{ data.match_count }} 只满足条件，当前显示 {{ data.candidates|length }} 只</p></div><span>数据日 {{ data.as_of or '—' }}</span></div>
   <div class="table-wrap"><table class="screener-table">
-    <thead><tr><th>股票</th><th>状态</th><th>评分</th><th>20日动量</th><th>MA20</th><th>量比</th><th>年化波动</th><th>失效位</th></tr></thead>
+    <thead><tr><th scope="col">股票</th><th scope="col">状态</th><th scope="col">评分</th><th scope="col">20日动量</th><th scope="col">MA20</th><th scope="col">量比</th><th scope="col">年化波动</th><th scope="col">失效位</th></tr></thead>
     <tbody>{% for row in data.candidates %}<tr>
       <td><a href="/stocks/{{ row.code }}"><strong>{{ row.name }}</strong><small>{{ row.code }}</small></a></td>
       <td><span class="pill label-{{ row.label }}">{{ row.label }}</span></td><td><span class="score">{{ row.score }}</span></td>

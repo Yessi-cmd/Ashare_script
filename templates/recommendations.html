@@ -2,23 +2,40 @@
 {% block content %}
 <section class="hero compact">
   <div><p class="eyebrow">EXPLAINABLE SHORTLIST</p><h1>荐股研究榜</h1><p>不是“必涨名单”，而是按同一交易日生成的优先研究顺序。</p></div>
-  <div class="freshness ok"><span>统一数据日</span><strong>{{ data.as_of or '暂无数据' }}</strong></div>
+  <div class="freshness ok"><span>统一数据日</span><strong>{{ data.as_of or '暂无数据' }}</strong><small>{{ data.eligible_size }} 只数据合格</small></div>
 </section>
 
 <section class="research-notice"><strong>范围说明</strong><span>覆盖 {{ data.universe_size }} 只固定研究样本，{{ data.eligible_size }} 只数据合格；使用 {{ data.model }}，未使用样本外未通过的 V3。</span></section>
 
-<section class="candidate-grid">{% for row in data.candidates %}
-  <article class="candidate-card detailed">
-    <div class="candidate-head">
-      <div><span class="pill label-{{ row.label }}">{{ row.label }}</span><h2><a href="/stocks/{{ row.code }}">{{ row.name }}</a></h2><small>{{ row.code }}{% if row.is_portfolio %} · 已持仓{% elif row.is_watchlist %} · 已关注{% endif %}</small></div>
-      <div class="score-block"><strong>{{ row.score }}</strong><small>V2 评分</small></div>
-    </div>
-    <div class="factor-strip"><span>收盘 ¥{{ '%.2f'|format(row.close) }}</span><span>20日 {{ '%+.1f'|format(row.momentum_20) }}%</span><span>波动 {{ '%.1f'|format(row.volatility) }}%</span><span>回撤 {{ '%.1f'|format(row.drawdown_60) }}%</span></div>
-    <div class="argument-grid">
-      <div><h3>为什么入选</h3><ul>{% for reason in row.reasons %}<li>{{ reason }}</li>{% endfor %}</ul></div>
-      <div class="counter"><h3>反对理由</h3><ul>{% for objection in row.objections %}<li>{{ objection }}</li>{% endfor %}</ul></div>
-    </div>
-    <div class="invalidation"><span>观察失效位（近20日低点）</span><strong>¥{{ '%.2f'|format(row.invalidation_price) }}</strong></div>
-  </article>
-{% else %}<div class="panel empty">没有足够的本地日线数据，请先运行同步任务。</div>{% endfor %}</section>
+<section class="panel recommendation-board" aria-labelledby="recommendation-list-title">
+  <div class="board-title-row">
+    <div><span class="eyebrow">RANKED RESEARCH QUEUE</span><h2 id="recommendation-list-title">优先研究顺序</h2></div>
+    <span class="board-count">{{ data.candidates|length }} / {{ data.eligible_size }} 只候选</span>
+  </div>
+  <div class="recommendation-columns" aria-hidden="true">
+    <span>排名</span><span>股票</span><span>评分</span><span>关键因子</span><span>入选依据 / 风险</span><span>失效位</span>
+  </div>
+  <div class="recommendation-list">{% for row in data.candidates %}
+    <article class="recommendation-row candidate-card detailed" id="stock-{{ row.code }}">
+      <div class="rank-cell"><strong>{{ '%02d'|format(loop.index) }}</strong><small>RANK</small></div>
+      <div class="identity-cell">
+        <div class="identity-top"><span class="pill label-{{ row.label }}">{{ row.label }}</span>{% if row.is_portfolio %}<span class="ownership-tag">已持仓</span>{% elif row.is_watchlist %}<span class="ownership-tag">已关注</span>{% endif %}</div>
+        <h3><a href="/stocks/{{ row.code }}">{{ row.name }}</a></h3>
+        <div class="identity-bottom"><span>{{ row.code }}</span><a class="detail-link" href="/stocks/{{ row.code }}">查看详情 <span aria-hidden="true">→</span></a></div>
+      </div>
+      <div class="score-cell"><strong>{{ row.score }}</strong><small>V2 评分</small></div>
+      <div class="metrics-cell">
+        <div class="rec-metric"><span>收盘</span><strong>¥{{ '%.2f'|format(row.close) }}</strong></div>
+        <div class="rec-metric"><span>20日动量</span><strong class="{{ 'up' if row.momentum_20 >= 0 else 'down' }}">{{ '%+.1f'|format(row.momentum_20) }}%</strong></div>
+        <div class="rec-metric"><span>波动</span><strong>{{ '%.1f'|format(row.volatility) }}%</strong></div>
+        <div class="rec-metric"><span>回撤</span><strong class="{{ 'down' if row.drawdown_60 <= 0 else 'up' }}">{{ '%.1f'|format(row.drawdown_60) }}%</strong></div>
+      </div>
+      <div class="thesis-cell">
+        <div class="thesis-group"><span class="thesis-label positive-label">为什么入选</span><p>{{ row.reasons|join(' · ') }}</p></div>
+        <div class="thesis-group counter"><span class="thesis-label counter-label">反对理由</span><p>{{ row.objections|join(' · ') }}</p></div>
+      </div>
+      <div class="invalid-cell"><span>观察失效位</span><strong>¥{{ '%.2f'|format(row.invalidation_price) }}</strong><small>近20日低点</small></div>
+    </article>
+  {% else %}<div class="empty">没有足够的本地日线数据，请先运行同步任务。</div>{% endfor %}</div>
+</section>
 {% endblock %}

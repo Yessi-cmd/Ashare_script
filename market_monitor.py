@@ -29,6 +29,15 @@ RUNNING = True
 STOP_EVENT = threading.Event()
 logger = logging.getLogger(__name__)
 
+# 全部行情失败时的退避上限（秒），避免长时间限流时反复高频重试。
+MAX_BACKOFF_SECONDS = 60 * 60
+BACKOFF_FACTOR = 3.0
+
+
+def _backoff_wait(interval: float, failures: int) -> float:
+    """指数退避：连续失败时逐步拉长等待，最多 MAX_BACKOFF_SECONDS。"""
+    return min(interval * (BACKOFF_FACTOR ** max(failures, 1)), MAX_BACKOFF_SECONDS)
+
 
 def signal_handler(signum, frame):
     del signum, frame
@@ -61,7 +70,7 @@ def setup_logging(config: dict):
 def run_market_cycle(config: dict, test_mode: bool = False) -> tuple[int, list[str]]:
     """Fetch and persist one cycle; return saved count and isolated errors."""
 
-    definitions = market_definitions(config)
+    definitions = market_definitions(config, include_a_share=True)
     if not definitions:
         logger.info("跨市场监控已禁用或没有配置指数")
         return 0, []
@@ -86,7 +95,7 @@ def print_market_cycle(quotes, test_mode: bool = False):
     """Print a compact terminal view useful for manual test runs."""
 
     print("\n" + "=" * 72)
-    print("  🌏 全球市场行情 | 港股 · 韩国 · 美股 · 日本")
+    print("  🌏 基准指数行情 | A股 · 港股 · 韩国 · 美股 · 日本")
     print("=" * 72)
     for quote in quotes:
         direction = "🔴" if quote.change_pct > 0 else "🟢" if quote.change_pct < 0 else "⚪"
@@ -116,26 +125,38 @@ def market_monitor_loop(
 
     interval = market_poll_interval(config)
     logger.info(f"跨市场轮询间隔: {interval:g} 秒")
+    failures = 0
     while RUNNING:
         try:
             saved, errors = run_market_cycle(config, test_mode=test_mode)
             if test_mode or once:
                 return bool(saved) or not errors
-            STOP_EVENT.wait(interval)
+            if not saved:
+                failures += 1
+                wait = _backoff_wait(interval, failures)
+                logger.warning(
+                    f"本轮跨市场行情全部失败（{len(errors)} 条错误），"
+                    f"第 {failures} 次连续失败，下次重试等待 {wait:g} 秒"
+                )
+                STOP_EVENT.wait(wait)
+            else:
+                failures = 0
+                STOP_EVENT.wait(interval)
         except KeyboardInterrupt:
             break
         except Exception as exc:
             logger.error(f"跨市场监控异常: {exc}", exc_info=True)
             if test_mode or once:
                 return False
-            STOP_EVENT.wait(interval)
+            failures += 1
+            STOP_EVENT.wait(_backoff_wait(interval, failures))
 
     logger.info("跨市场监控已停止")
     return True
 
 
 def main():
-    parser = argparse.ArgumentParser(description="港股、韩国、美股、日本行情采集器")
+    parser = argparse.ArgumentParser(description="A股与全球基准指数行情采集器")
     parser.add_argument(
         "--config", "-c", default="config.yaml", help="配置文件路径 (默认: config.yaml)"
     )
@@ -155,7 +176,7 @@ def main():
 
     global logger
     logger = setup_logging(config)
-    logger.info("🌏 港股、韩国、美股、日本行情采集器启动")
+    logger.info("🌏 A股与全球基准指数行情采集器启动")
     if args.test:
         logger.info("🧪 运行模式: 测试")
     elif args.once:

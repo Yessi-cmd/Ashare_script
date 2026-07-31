@@ -51,6 +51,13 @@ global_markets:
   poll_interval_seconds: 300
   request_timeout_seconds: 10
   markets:
+    a_share:
+      name: "A股"
+      indices:
+        - { symbol: "000001.SS", name: "上证指数", local_code: "000001" }
+        - { symbol: "399001.SZ", name: "深证成指", local_code: "399001" }
+        - { symbol: "399006.SZ", name: "创业板指", local_code: "399006" }
+        - { symbol: "000300.SS", name: "沪深 300", local_code: "000300" }
     hk:
       name: "港股"
       indices:
