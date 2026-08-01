@@ -1,0 +1,96 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="paper-header">
+  <div>
+    <p class="eyebrow">PAPER ACCOUNT</p>
+    <h1>模拟盘</h1>
+  </div>
+  <div class="paper-market-state">
+    <span class="pill {{ 'ok' if data.market_open else 'stale' }}">{{ '交易中' if data.market_open else '休市' }}</span>
+    <small>{{ '最新快照 ' ~ data.latest_quote_at.strftime('%m-%d %H:%M:%S') if data.latest_quote_at else '等待行情快照' }}</small>
+  </div>
+</section>
+
+{% if notice %}<div class="paper-notice {{ notice.tone }}" role="status">{{ notice.text }}</div>{% endif %}
+
+<section class="metrics paper-metrics" aria-label="模拟账户概览">
+  <article><span>初始资金</span><strong>¥{{ '%.2f'|format(data.account.initial_cash) }}</strong><small>固定基准</small></article>
+  <article><span>可用现金</span><strong>¥{{ '%.2f'|format(data.account.cash) }}</strong><small>{{ data.pending_count }} 笔待成交</small></article>
+  <article><span>持仓市值</span><strong>¥{{ '%.2f'|format(data.account.market_value) }}</strong><small>{{ data.positions|length }} 只持仓</small></article>
+  <article><span>总资产</span><strong>¥{{ '%.2f'|format(data.account.equity) }}</strong><small>现金 + 持仓市值</small></article>
+  <article><span>累计收益</span><strong class="{{ 'up' if data.account.total_profit >= 0 else 'down' }}">{{ '%+.2f'|format(data.account.total_profit_pct) }}%</strong><small class="{{ 'up' if data.account.total_profit >= 0 else 'down' }}">{{ '%+.2f'|format(data.account.total_profit) }} 元</small></article>
+</section>
+
+<div class="paper-workspace">
+  <section class="panel order-ticket">
+    <div class="section-title"><div><h2>买入委托</h2><p>市价 · 100 股整数倍</p></div><span>可用 ¥{{ '%.2f'|format(data.account.cash) }}</span></div>
+    <form method="post" action="/paper/orders" class="paper-order-form">
+      <input type="hidden" name="csrf_token" value="{{ data.csrf_token }}">
+      <input type="hidden" name="client_order_id" value="{{ data.buy_client_order_id }}">
+      <input type="hidden" name="side" value="BUY">
+      <label for="paper-stock-code">股票代码<input id="paper-stock-code" name="stock_code" type="text" inputmode="numeric" autocomplete="off" pattern="[0-9]{1,6}" maxlength="6" placeholder="600519" required></label>
+      <label for="paper-buy-quantity">买入股数<input id="paper-buy-quantity" name="quantity" type="number" min="100" step="100" value="100" required></label>
+      <button class="primary-button" type="submit">提交买入</button>
+    </form>
+    <p class="paper-hint">委托按提交顺序，在交易时段首次取得该股票实时快照后一次性成交。</p>
+  </section>
+
+  <section class="panel live-comparison">
+    <div class="section-title"><div><h2>实盘记录</h2><p>手工登记持仓</p></div><span>{{ data.live.priced_count }}/{{ data.live.holding_count }} 只有快照</span></div>
+    <dl class="comparison-list">
+      <div><dt>成本</dt><dd>¥{{ '%.2f'|format(data.live.total_cost) }}</dd></div>
+      <div><dt>估算市值</dt><dd>¥{{ '%.2f'|format(data.live.total_value) }}</dd></div>
+      <div><dt>持仓盈亏</dt><dd class="{{ 'up' if data.live.total_profit >= 0 else 'down' }}">{{ '%+.2f'|format(data.live.total_profit) }} 元</dd></div>
+      <div><dt>收益率</dt><dd class="{{ 'up' if data.live.total_profit >= 0 else 'down' }}">{{ '%+.2f'|format(data.live.total_profit_pct) }}%</dd></div>
+    </dl>
+  </section>
+</div>
+
+<section class="panel paper-position-panel">
+  <div class="section-title"><div><h2>模拟持仓</h2><p>成本含买入费用，可卖数量按 T+1 计算</p></div><span>已实现 {{ '%+.2f'|format(data.account.realized_profit) }} 元</span></div>
+  <div class="table-wrap"><table class="paper-position-table">
+    <thead><tr><th scope="col">股票</th><th scope="col">持仓 / 可卖</th><th scope="col">成本价</th><th scope="col">现价</th><th scope="col">市值</th><th scope="col">浮动盈亏</th><th scope="col">V2 评分</th><th scope="col">卖出</th></tr></thead>
+    <tbody>
+      {% for position in data.positions %}<tr>
+        <td data-label="股票"><a href="/stocks/{{ position.code }}"><strong>{{ position.name }}</strong><small>{{ position.code }}</small></a></td>
+        <td data-label="持仓 / 可卖"><strong>{{ position.shares }}</strong><small>可卖 {{ position.sellable_shares }}</small></td>
+        <td data-label="成本价">¥{{ '%.3f'|format(position.average_cost) }}<small>止损 ¥{{ '%.2f'|format(position.stop_price) }} · 止盈 ¥{{ '%.2f'|format(position.take_profit_price) }}</small></td>
+        <td data-label="现价">{% if position.snapshot %}¥{{ '%.2f'|format(position.snapshot.price) }}<small class="{{ 'up' if position.snapshot.change_pct >= 0 else 'down' }}">{{ '快照过期' if position.snapshot.stale else '%+.2f%%'|format(position.snapshot.change_pct) }}</small>{% else %}<span class="muted-value">待行情</span>{% endif %}</td>
+        <td data-label="市值">¥{{ '%.2f'|format(position.market_value) }}</td>
+        <td data-label="浮动盈亏" class="{{ 'up' if position.profit_amount >= 0 else 'down' }}">{{ '%+.2f'|format(position.profit_amount) }}<small>{{ '%+.2f'|format(position.profit_pct) }}%</small></td>
+        <td data-label="V2 评分">{% if position.snapshot and position.snapshot.score is not none %}<span class="score">{{ position.snapshot.score }}</span><small>{{ position.signal_label }}</small>{% else %}<span class="muted-value">—</span>{% endif %}</td>
+        <td data-label="卖出" class="paper-action-cell">
+          {% if position.sellable_shares >= data.rules.lot_size %}<form method="post" action="/paper/orders" class="paper-sell-form" data-confirm="确认卖出">
+            <input type="hidden" name="csrf_token" value="{{ data.csrf_token }}">
+            <input type="hidden" name="client_order_id" value="{{ position.sell_client_order_id }}">
+            <input type="hidden" name="side" value="SELL">
+            <input type="hidden" name="stock_code" value="{{ position.code }}">
+            <label><span class="sr-only">卖出股数</span><input name="quantity" type="number" min="100" max="{{ position.sellable_shares }}" step="100" value="100" required></label>
+            <button class="secondary-button compact-button" type="submit">卖出</button>
+          </form>{% else %}<small>今日不可卖</small>{% endif %}
+        </td>
+      </tr>{% else %}<tr><td colspan="8" class="empty">暂无模拟持仓</td></tr>{% endfor %}
+    </tbody>
+  </table></div>
+</section>
+
+<section class="panel paper-orders-panel">
+  <div class="section-title"><div><h2>委托记录</h2><p>最近 50 笔</p></div><span>{{ data.pending_count }} 笔待成交</span></div>
+  <div class="table-wrap"><table class="paper-orders-table">
+    <thead><tr><th scope="col">时间 / 编号</th><th scope="col">股票</th><th scope="col">方向</th><th scope="col">数量</th><th scope="col">状态</th><th scope="col">成交价</th><th scope="col">费用</th><th scope="col">操作 / 原因</th></tr></thead>
+    <tbody>
+      {% for order in data.orders %}<tr>
+        <td data-label="时间 / 编号">{{ order.submitted_at.strftime('%m-%d %H:%M:%S') }}<small>#{{ order.id }}</small></td>
+        <td data-label="股票"><strong>{{ order.name }}</strong><small>{{ order.code }}</small></td>
+        <td data-label="方向" class="{{ 'up' if order.side == 'BUY' else 'down' }}">{{ order.side_label }}</td>
+        <td data-label="数量">{{ order.quantity }}</td>
+        <td data-label="状态"><span class="order-status status-{{ order.status }}">{{ order.status_label }}</span></td>
+        <td data-label="成交价">{{ '¥%.2f'|format(order.price) if order.price is not none else '—' }}</td>
+        <td data-label="费用">{{ '¥%.2f'|format(order.fee) if order.fee is not none else '—' }}</td>
+        <td data-label="操作 / 原因">{% if order.status == 'pending' %}<form method="post" action="/paper/orders/{{ order.id }}/cancel" data-confirm="确认撤单"><input type="hidden" name="csrf_token" value="{{ data.csrf_token }}"><button class="text-button" type="submit">撤单</button></form>{% elif order.reject_reason %}<small class="reject-reason">{{ order.reject_reason }}</small>{% else %}<small>{{ order.executed_at.strftime('%m-%d %H:%M:%S') if order.executed_at else '—' }}</small>{% endif %}</td>
+      </tr>{% else %}<tr><td colspan="8" class="empty">暂无委托记录</td></tr>{% endfor %}
+    </tbody>
+  </table></div>
+  <p class="paper-disclosure">模拟成交使用轮询快照，不代表交易所可成交价格；费用按万三佣金（最低 5 元）、过户费和卖出印花税计算。</p>
+</section>
+{% endblock %}

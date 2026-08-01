@@ -10,6 +10,7 @@ from datetime import datetime
 from pathlib import Path
 
 from sqlalchemy import (
+    CheckConstraint,
     Column,
     Date,
     DateTime,
@@ -201,6 +202,114 @@ class MarketQuoteSnapshot(Base):
     source = Column(String(40), nullable=False, default="yahoo_chart")
 
 
+class PaperAccount(Base):
+    """Single-owner paper-trading cash ledger, stored in integer fen."""
+    __tablename__ = "paper_accounts"
+
+    owner_user_id = Column(Integer, primary_key=True)
+    initial_cash_fen = Column(Integer, nullable=False, default=1_000_000)
+    cash_fen = Column(Integer, nullable=False, default=1_000_000)
+    realized_pnl_fen = Column(Integer, nullable=False, default=0)
+    created_at = Column(DateTime, default=datetime.now, nullable=False)
+    updated_at = Column(
+        DateTime, default=datetime.now, onupdate=datetime.now, nullable=False
+    )
+
+    positions = relationship(
+        "PaperPosition", back_populates="account", cascade="all, delete-orphan"
+    )
+    orders = relationship(
+        "PaperOrder", back_populates="account", cascade="all, delete-orphan"
+    )
+
+    __table_args__ = (
+        CheckConstraint("initial_cash_fen > 0", name="ck_paper_account_initial_cash"),
+        CheckConstraint("cash_fen >= 0", name="ck_paper_account_cash"),
+    )
+
+
+class PaperPosition(Base):
+    """Current paper position with an all-in remaining cost basis."""
+    __tablename__ = "paper_positions"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    owner_user_id = Column(
+        Integer,
+        ForeignKey("paper_accounts.owner_user_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    stock_code = Column(String(10), nullable=False, index=True)
+    name = Column(String(50), nullable=False)
+    shares = Column(Integer, nullable=False)
+    cost_basis_fen = Column(Integer, nullable=False)
+    created_at = Column(DateTime, default=datetime.now, nullable=False)
+    updated_at = Column(
+        DateTime, default=datetime.now, onupdate=datetime.now, nullable=False
+    )
+
+    account = relationship("PaperAccount", back_populates="positions")
+
+    __table_args__ = (
+        Index(
+            "uq_paper_positions_owner_stock",
+            "owner_user_id",
+            "stock_code",
+            unique=True,
+        ),
+        CheckConstraint("shares > 0", name="ck_paper_position_shares"),
+        CheckConstraint("cost_basis_fen >= 0", name="ck_paper_position_cost"),
+    )
+
+
+class PaperOrder(Base):
+    """Immutable paper-order intent plus its eventual execution outcome."""
+    __tablename__ = "paper_orders"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    owner_user_id = Column(
+        Integer,
+        ForeignKey("paper_accounts.owner_user_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    client_order_id = Column(String(64), nullable=False)
+    side = Column(String(4), nullable=False)
+    stock_code = Column(String(10), nullable=False, index=True)
+    name = Column(String(50), nullable=False)
+    quantity = Column(Integer, nullable=False)
+    status = Column(String(12), nullable=False, default="pending", index=True)
+    submitted_at = Column(DateTime, default=datetime.now, nullable=False)
+    executed_at = Column(DateTime, nullable=True)
+    price_fen = Column(Integer, nullable=True)
+    gross_amount_fen = Column(Integer, nullable=True)
+    fee_fen = Column(Integer, nullable=True)
+    reject_reason = Column(String(200), nullable=True)
+
+    account = relationship("PaperAccount", back_populates="orders")
+
+    __table_args__ = (
+        Index(
+            "uq_paper_orders_owner_client",
+            "owner_user_id",
+            "client_order_id",
+            unique=True,
+        ),
+        Index(
+            "ix_paper_orders_owner_status_id",
+            "owner_user_id",
+            "status",
+            "id",
+        ),
+        CheckConstraint("quantity > 0", name="ck_paper_order_quantity"),
+        CheckConstraint("side IN ('BUY', 'SELL')", name="ck_paper_order_side"),
+        CheckConstraint(
+            "status IN ('pending', 'filled', 'rejected', 'cancelled')",
+            name="ck_paper_order_status",
+        ),
+    )
+
+
 # ── 数据库初始化 ──────────────────────────────────────────────────
 
 
@@ -221,6 +330,9 @@ def init_db():
             DailyBar.__table__,
             QuoteSnapshot.__table__,
             MarketQuoteSnapshot.__table__,
+            PaperAccount.__table__,
+            PaperPosition.__table__,
+            PaperOrder.__table__,
         ):
             for index in table.indexes:
                 if index.unique:

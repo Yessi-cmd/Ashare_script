@@ -38,14 +38,21 @@
 ### 🧪 可审计策略研究
 - 本地 qfq 日线仓库与显式 raw 指数数据源
 - 无未来函数、次日开盘成交、包含佣金/印花税/滑点的回测器
+- 横截面选股研究候选：同日因子排名、Top-K 限仓、定期调仓和组合净值
 - 训练集选参、严格样本外验证、跨股票与滚动窗口对照
-- V3 多因子目前仅为研究候选；因稳定性未达标，不会冒险替换实时 V2
+- V3 与横截面候选目前均为研究候选；因稳定性未达标，不会替换实时 V2
 
 ### 🌐 个人 Web 仪表盘
-- FastAPI + Jinja2 + ECharts，只读本地行情快照和日线
+- FastAPI + Jinja2 + ECharts；行情和研究页面只读本地快照与日线
 - 中文登录页与最长 30 天签名会话，持仓盈亏、K 线和系统状态
 - 19 股本地可解释荐股榜：入选理由、反对理由、风险与观察失效位
 - 可收藏 URL 的组合自助选股器；明确研究范围，不冒充全市场扫描
+
+### 💰 实时模拟盘
+- 首次访问自动创建 10,000 元模拟账户，可提交任意 A 股市价买卖委托
+- 监控进程用同一轮实时行情撮合，模拟持仓继续显示 V2 评分与信号阈值
+- 100 股整手、T+1、资金与可卖数量校验，并计入佣金、过户费和印花税
+- 现金、持仓、盈亏、订单历史与手工登记实盘并列对照；不连接券商、不自动下单
 
 ### 🌏 多市场行情面板
 - `/markets` 展示港股恒生、韩国 KOSPI、美股标普/纳指/道指、日本日经 225
@@ -113,7 +120,7 @@ python bot.py &
 
 启动 Bot 前必须将 `app.owner_user_id` 设置为你自己的 Telegram User ID；未配置时 Bot 会安全退出，不再默认允许所有人使用。
 
-### 5. 启动只读 Web（可选）
+### 5. 启动 Web 与模拟盘（可选）
 
 ```bash
 export ASHARE_WEB_USERNAME='你的用户名'
@@ -122,7 +129,7 @@ export ASHARE_WEB_SESSION_SECRET='另一段至少32字节的随机值'
 python web_app.py
 ```
 
-打开 `http://127.0.0.1:8000`。开发机之外不要直接暴露 8000；服务器步骤见 [部署指南](deploy/README_deploy.md)。
+打开 `http://127.0.0.1:8000/paper`。模拟委托由持续运行的 `monitor.py` 在交易时段下一轮行情中处理；`--test` 模式不会成交。开发机之外不要直接暴露 8000；服务器步骤见 [部署指南](deploy/README_deploy.md)。
 
 ### 6. 策略研究
 
@@ -138,9 +145,15 @@ python research.py walk-forward 000001 600519 300750 \
   --train-start 2024-01-01 --train-end 2025-06-30 \
   --validation-start 2025-07-01 --validation-end 2026-07-17 \
   --strategy v3 --thresholds 60,65,70,75,80
+
+# 横截面 Top-K 组合回测（只读本地缓存）
+python research.py portfolio-backtest 000001 000333 000858 002415 002475 \
+  002594 300059 300124 300750 600030 600036 600276 600519 601012 \
+  601088 601318 601899 603259 688981 \
+  --top-n 3 --rebalance-every 5 --benchmark-code 000300
 ```
 
-完整设计、实验失败和样本外证据见 [升级路线](docs/roadmap/README.md)。
+横截面候选只用于研究，不会自动接入实时告警；完整设计、实验结果和限制见 [升级路线](docs/roadmap/README.md)。
 
 ## 📋 示例输出
 
@@ -186,9 +199,12 @@ Ashare_script/
 ├── market_data.py      # 本地日线仓库和外部源降级
 ├── backtest_engine.py  # 无未来函数回测器
 ├── strategy_v3.py      # 多因子研究候选（未上线）
+├── cross_sectional_strategy.py # 同日因子排名研究候选
+├── portfolio_backtest.py # 有限持仓组合回测
 ├── walk_forward.py     # 训练/验证分离
 ├── research.py         # 研究 CLI
-├── web_app.py          # 只读个人 Web
+├── paper_trading.py    # 模拟账户、费用、T+1、委托与撮合
+├── web_app.py          # 本地行情研究与模拟盘 Web
 ├── snapshot_store.py   # 监控到 Web 的本地快照
 ├── global_market_data.py # 跨市场定义、解析和快照存储
 ├── notifier.py         # 通知模块

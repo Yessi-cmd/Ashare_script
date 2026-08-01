@@ -1,3 +1,4 @@
+import copy
 import time
 import unittest
 from unittest.mock import patch
@@ -5,7 +6,12 @@ from unittest.mock import patch
 import pandas as pd
 from fastapi.testclient import TestClient
 
-from web_app import SESSION_COOKIE_NAME, _make_session_token, app
+from web_app import (
+    SESSION_COOKIE_NAME,
+    _make_csrf_token,
+    _make_session_token,
+    app,
+)
 
 
 EMPTY_RECOMMENDATIONS = {
@@ -108,6 +114,33 @@ AUTH_ENV = {
     "ASHARE_WEB_PASSWORD": "secret",
     "ASHARE_WEB_SESSION_SECRET": "0123456789abcdef0123456789abcdef",
 }
+EMPTY_PAPER = {
+    "owner_user_id": 0,
+    "account": {
+        "initial_cash": 10_000.0,
+        "cash": 10_000.0,
+        "market_value": 0.0,
+        "equity": 10_000.0,
+        "total_profit": 0.0,
+        "total_profit_pct": 0.0,
+        "realized_profit": 0.0,
+    },
+    "positions": [],
+    "orders": [],
+    "pending_count": 0,
+    "market_open": False,
+    "latest_quote_at": None,
+    "stale_after_seconds": 120,
+    "live": {
+        "holding_count": 0,
+        "priced_count": 0,
+        "total_cost": 0.0,
+        "total_value": 0.0,
+        "total_profit": 0.0,
+        "total_profit_pct": 0.0,
+    },
+    "rules": {"lot_size": 100, "stop_loss_pct": -5, "take_profit_pct": 10},
+}
 
 
 class WebAppTests(unittest.TestCase):
@@ -209,7 +242,7 @@ class WebAppTests(unittest.TestCase):
         self.assertIn("大盘概览", response.text)
         self.assertIn("data-theme-toggle", response.text)
         self.assertIn("跳到主要内容", response.text)
-        self.assertIn("/static/app.js?v=13", response.text)
+        self.assertIn("/static/app.js?v=14", response.text)
 
     def test_shared_navigation_marks_current_page_and_login_has_theme_control(self):
         with patch.dict("os.environ", AUTH_ENV, clear=True), patch(
@@ -221,6 +254,62 @@ class WebAppTests(unittest.TestCase):
         self.assertIn('href="/markets" aria-current="page"', page.text)
         self.assertEqual(login.status_code, 200)
         self.assertIn("data-theme-toggle", login.text)
+
+    def test_paper_page_is_authenticated_and_renders_initial_account(self):
+        with patch.dict("os.environ", AUTH_ENV, clear=True), patch(
+            "web_app._config", return_value={}
+        ), patch(
+            "web_app.load_paper_dashboard", return_value=copy.deepcopy(EMPTY_PAPER)
+        ):
+            rejected = self.client.get("/paper")
+            accepted = self.client.get("/paper", auth=("owner", "secret"))
+        self.assertEqual(rejected.status_code, 303)
+        self.assertEqual(accepted.status_code, 200)
+        self.assertIn('href="/paper" aria-current="page"', accepted.text)
+        self.assertIn("初始资金", accepted.text)
+        self.assertIn("10000.00", accepted.text)
+
+    def test_paper_order_requires_valid_csrf(self):
+        with patch.dict("os.environ", AUTH_ENV, clear=True), patch(
+            "web_app._config", return_value={}
+        ), patch("web_app.submit_paper_order") as submit:
+            response = self.client.post(
+                "/paper/orders",
+                auth=("owner", "secret"),
+                data={
+                    "side": "BUY",
+                    "stock_code": "600519",
+                    "quantity": "100",
+                    "client_order_id": "order_key_web_1",
+                    "csrf_token": "tampered",
+                },
+            )
+        self.assertEqual(response.status_code, 403)
+        submit.assert_not_called()
+
+    def test_paper_order_with_csrf_uses_prg_and_owner_key(self):
+        csrf_token = _make_csrf_token(
+            "owner", AUTH_ENV["ASHARE_WEB_SESSION_SECRET"], int(time.time()) + 60
+        )
+        with patch.dict("os.environ", AUTH_ENV, clear=True), patch(
+            "web_app._config", return_value={"app": {"owner_user_id": 123}}
+        ), patch("web_app.submit_paper_order") as submit:
+            response = self.client.post(
+                "/paper/orders",
+                auth=("owner", "secret"),
+                data={
+                    "side": "BUY",
+                    "stock_code": "600519",
+                    "quantity": "100",
+                    "client_order_id": "order_key_web_2",
+                    "csrf_token": csrf_token,
+                },
+            )
+        self.assertEqual(response.status_code, 303)
+        self.assertEqual(response.headers["location"], "/paper?result=order-created")
+        submit.assert_called_once_with(
+            123, "BUY", "600519", "100", "order_key_web_2"
+        )
 
     def test_recommendations_use_dense_ranked_rows(self):
         with patch.dict("os.environ", AUTH_ENV, clear=True), patch(

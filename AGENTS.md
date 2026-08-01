@@ -36,7 +36,7 @@ python main.py --markets    # only cross-market collector
 python main.py --bot        # only bot
 python main.py --test       # test mode (monitor once, no notifications)
 
-# Authenticated read-only Web (credentials must be in environment)
+# Authenticated local Web and paper trading (credentials must be in environment)
 ASHARE_WEB_USERNAME=owner ASHARE_WEB_PASSWORD=long-random-password python web_app.py
 
 # Local research and server maintenance
@@ -53,7 +53,7 @@ python backup_database.py --help
 
 ## Architecture
 
-The system has three independent long-running processes (`monitor.py`, `market_monitor.py`, and `bot.py`) that share the same database and config.
+The monitor, cross-market collector, Bot, and authenticated Web run independently and share the same database and config.
 
 ### Module Dependency Graph
 
@@ -79,13 +79,13 @@ The system has three independent long-running processes (`monitor.py`, `market_m
 
 | Module | Role | Key Exports |
 |--------|------|-------------|
-| `monitor.py` | Main monitoring loop. Checks trading hours, fetches quotes, runs checks, prints terminal dashboard, sends alerts. | `monitor_loop()`, `print_dashboard()`, `is_trading_time()` |
+| `monitor.py` | Main monitoring loop. Checks trading hours, fetches quotes, runs checks, executes queued paper orders, prints terminal dashboard, sends alerts. | `monitor_loop()`, `print_dashboard()`, `is_trading_time()` |
 | `strategies.py` | Scoring engine + stop-loss/take-profit checks. Uses 5-factor 0–100 score (RSI 25pt, MACD 20pt, MA 15pt, volume 10pt, daily change 5pt, baseline 50). | `Alert` dataclass, `calculate_score()`, `run_all_checks()`, `fetch_realtime_quotes()`, `check_portfolio()`, `prefilter_full_market()` |
 | `notifier.py` | Multi-channel notification dispatch. Sends to all enabled channels. | `send_notification()`, `format_alerts()` |
 | `bot.py` | Telegram Bot for interactive portfolio/watchlist management. Uses `python-telegram-bot`. | Command handlers: `/add`, `/remove`, `/list`, `/watch`, `/unwatch`, `/status`, `/news`, `/morning`, `/evening` |
 | `news.py` | Financial news: morning briefing (overnight markets + flash news), evening summary (indices + money flow), instant news. Thread-based API timeout protection (5s) with RSS fallback. | `get_morning_news()`, `get_evening_news()`, `get_instant_news()` |
 | `holidays.py` | Hardcoded 2026 China A-share holiday calendar. | `is_trading_day()`, `is_holiday()`, `get_next_trading_day()` |
-| `database.py` | SQLAlchemy ORM (SQLite). Stores the personal owner, portfolio, watchlist, and persistent alert cooldown state. | `init_db()`, `get_db()`, `User`, `Portfolio`, `Watchlist`, `AlertState` |
+| `database.py` | SQLAlchemy ORM (SQLite). Stores personal data, snapshots, alert state, and the paper-trading ledger. | `init_db()`, `get_db()`, `PaperAccount`, `PaperPosition`, `PaperOrder` |
 | `user_config.py` | DB-backed user config layer. Exposes dict-based API (compatible with old YAML format) but persists to SQLite. | `load_user_config()`, `save_user_config()`, `get_all_users()`, `get_all_portfolios()`, `get_all_watchlists()` |
 | `settings.py` | Validated YAML configuration loader and single-owner resolution. | `load_config()`, `validate_config()`, `get_owner_user_id()` |
 | `alert_store.py` | Persists alert cooldown state so restarts do not repeat alerts immediately. | `load_alert_cache()`, `mark_alerted()` |
@@ -96,7 +96,8 @@ The system has three independent long-running processes (`monitor.py`, `market_m
 | `strategy_v3.py` | Explainable candidate factor strategy and date-aligned market-context scorer. Not live. | `evaluate_strategy_v3()`, `make_strategy_v3_scorer()` |
 | `walk_forward.py` | Training-only threshold selection and strict out-of-sample validation. | `run_walk_forward()` |
 | `snapshot_store.py` | Atomic latest-quote/score handoff from monitor to Web. | `save_quote_snapshots()` |
-| `web_app.py` | Authenticated read-only FastAPI dashboard; never fetches external market data. | `app`, `require_auth()` |
+| `paper_trading.py` | Integer-fen paper ledger, order validation, A-share fees/T+1, monitor-driven execution, and dashboard valuation. | `submit_paper_order()`, `process_pending_paper_orders()`, `load_paper_dashboard()` |
+| `web_app.py` | Authenticated FastAPI dashboard. Market/research paths stay local-only; `/paper` has CSRF-protected paper-order writes. | `app`, `require_auth()` |
 | `sync_universe.py` | Timer-friendly local bar synchronization for the personal universe and CSI 300. | `universe_codes()`, `main()` |
 | `backup_database.py` | Verified online SQLite backup with retention pruning. | `create_backup()` |
 | `main.py` | Optional orchestration — spawns A-share monitor, cross-market monitor, and Bot as subprocesses with signal handling. | CLI flags: `--monitor`, `--markets`, `--bot`, `--test` |
@@ -105,11 +106,11 @@ The system has three independent long-running processes (`monitor.py`, `market_m
 
 1. `monitor.py` checks `is_trading_time()` via `holidays.py` → if not trading day/hour, sleep 60s
 2. Builds one personal monitoring snapshot: SQLite for `app.owner_user_id`, otherwise the YAML portfolio/watchlist
-3. Calls `strategies.fetch_realtime_quotes()` (or `prefilter_full_market()` in full-market mode) using AKShare
+3. Adds pending/held paper symbols, then calls `strategies.fetch_realtime_quotes()` (or `prefilter_full_market()` in full-market mode)
 4. Calls `strategies.run_all_checks()` → returns `list[Alert]` + `dict[code → (score, reason)]`
-5. Deduplicates alerts by `{stock_code}:{alert_type}` with a persistent 300s cooldown
-6. Prints `print_dashboard()` to stdout
-7. Calls `notifier.send_notification()` for new alerts
+5. Saves quote/score snapshots and executes eligible pending paper orders; test mode and closed sessions never execute
+6. Deduplicates alerts by `{stock_code}:{alert_type}` with a persistent 300s cooldown
+7. Prints `print_dashboard()` and calls `notifier.send_notification()` for new alerts
 
 The independent `market_monitor.py` process fetches configured HK/KR/US/JP
 benchmark quotes and writes `MarketQuoteSnapshot` rows. The Web `/markets`

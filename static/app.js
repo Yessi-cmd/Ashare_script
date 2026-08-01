@@ -41,4 +41,22 @@
       window.location.reload();
     });
   });
+
+  document.querySelectorAll("form[data-confirm]").forEach((form) => {
+    form.addEventListener("submit", (event) => {
+      if (form.dataset.confirmed === "true") return;
+      event.preventDefault();
+      const button = event.submitter || form.querySelector('button[type="submit"]');
+      if (!button) return;
+      const originalLabel = button.textContent;
+      form.dataset.confirmed = "true";
+      button.textContent = form.dataset.confirm;
+      button.classList.add("is-confirming");
+      window.setTimeout(() => {
+        form.dataset.confirmed = "false";
+        button.textContent = originalLabel;
+        button.classList.remove("is-confirming");
+      }, 4000);
+    });
+  });
 })();

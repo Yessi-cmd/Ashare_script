@@ -23,6 +23,7 @@ from strategies import calculate_score_from_history
 from strategy_v3 import make_strategy_v3_scorer, score_strategy_v3
 from strategy_comparison import ComparisonResult, compare_strategies
 from walk_forward import WalkForwardResult, run_walk_forward
+from portfolio_backtest import PortfolioConfig, PortfolioResult, run_portfolio_backtest
 
 
 def parse_date(value: str) -> date:
@@ -163,6 +164,32 @@ def format_walk_forward(result: WalkForwardResult) -> str:
     return "\n".join(lines)
 
 
+def format_portfolio(result: PortfolioResult) -> str:
+    summary = result.summary
+    lines = [
+        f"📊 组合回测 | {result.strategy_name}",
+        f"区间: {summary.start_date} 至 {summary.end_date} | {summary.trading_days} 个交易日",
+        f"调仓: {summary.rebalance_count} 次 | Top-{result.config.top_n} | "
+        f"每 {result.config.rebalance_every} 个交易日",
+        "",
+        "收益       年化收益   年化波动   夏普    最大回撤   换手率",
+        f"{summary.total_return_pct:+8.2f}%  {summary.annualized_return_pct:+8.2f}%  "
+        f"{summary.annualized_volatility_pct:>8.2f}%  "
+        f"{summary.sharpe if summary.sharpe is not None else '-':>6}  "
+        f"{summary.max_drawdown_pct:+8.2f}%  {summary.turnover_pct:>7.2f}%",
+    ]
+    if summary.benchmark_return_pct is not None:
+        lines.append(
+            f"基准收益: {summary.benchmark_return_pct:+.2f}% | "
+            f"超额收益: {summary.excess_return_pct:+.2f}%"
+        )
+    lines.extend([
+        "",
+        "说明: 同一交易日只按横截面可见数据排名，下一交易日开盘调仓；已计入成本。",
+    ])
+    return "\n".join(lines)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="A股本地行情与策略研究工具")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -244,6 +271,34 @@ def build_parser() -> argparse.ArgumentParser:
     walk_parser.add_argument("--slippage", type=float, default=0.0005)
     walk_parser.add_argument("--json", action="store_true", help="输出 JSON")
     walk_parser.add_argument("--output", type=Path, help="把完整 JSON 写入文件")
+
+    portfolio_parser = subparsers.add_parser(
+        "portfolio-backtest", help="运行横截面选股组合回测"
+    )
+    portfolio_parser.add_argument("stock_codes", nargs="+", help="研究池股票代码")
+    portfolio_parser.add_argument("--start", type=parse_date, help="评估开始日期")
+    portfolio_parser.add_argument("--end", type=parse_date, help="评估结束日期")
+    portfolio_parser.add_argument(
+        "--adjust", choices=("qfq", "hfq", "raw"), default="qfq"
+    )
+    portfolio_parser.add_argument("--top-n", type=int, default=3)
+    portfolio_parser.add_argument("--rebalance-every", type=int, default=5)
+    portfolio_parser.add_argument("--lookback-bars", type=int, default=126)
+    portfolio_parser.add_argument(
+        "--market-filter",
+        choices=("none", "close_above_ma20", "trend"),
+        default="none",
+        help="独立市场现金暴露开关",
+    )
+    portfolio_parser.add_argument("--benchmark-code", default="000300")
+    portfolio_parser.add_argument(
+        "--benchmark-adjust", choices=("qfq", "hfq", "raw"), default="raw"
+    )
+    portfolio_parser.add_argument("--commission", type=float, default=0.0003)
+    portfolio_parser.add_argument("--stamp-duty", type=float, default=0.0005)
+    portfolio_parser.add_argument("--slippage", type=float, default=0.0005)
+    portfolio_parser.add_argument("--json", action="store_true", help="输出 JSON")
+    portfolio_parser.add_argument("--output", type=Path, help="把完整 JSON 写入文件")
     return parser
 
 
@@ -332,6 +387,47 @@ def main() -> int:
             print(
                 json.dumps(payload, ensure_ascii=False, indent=2)
                 if args.json else format_walk_forward(result)
+            )
+            return 0
+
+        if args.command == "portfolio-backtest":
+            codes = [normalize_stock_code(code) for code in args.stock_codes]
+            bars_by_stock = {
+                code: load_daily_bars(code, None, args.end, normalize_adjust_argument(args.adjust))
+                for code in codes
+            }
+            benchmark = load_daily_bars(
+                normalize_stock_code(args.benchmark_code),
+                None,
+                args.end,
+                normalize_adjust_argument(args.benchmark_adjust),
+            )
+            config = PortfolioConfig(
+                stock_codes=tuple(codes),
+                lookback_bars=args.lookback_bars,
+                top_n=args.top_n,
+                rebalance_every=args.rebalance_every,
+                market_filter=args.market_filter,
+                commission_rate=args.commission,
+                stamp_duty_rate=args.stamp_duty,
+                slippage_rate=args.slippage,
+            )
+            result = run_portfolio_backtest(
+                bars_by_stock,
+                config,
+                benchmark_bars=benchmark,
+                evaluation_start=args.start,
+                evaluation_end=args.end,
+            )
+            payload = result.to_dict()
+            if args.output:
+                args.output.write_text(
+                    json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+                )
+                print(f"完整结果已写入: {args.output}")
+            print(
+                json.dumps(payload, ensure_ascii=False, indent=2)
+                if args.json else format_portfolio(result)
             )
             return 0
 

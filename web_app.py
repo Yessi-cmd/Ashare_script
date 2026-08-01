@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Authenticated read-only Web dashboard for the personal monitor."""
+"""Authenticated local dashboard for research and paper trading."""
 
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ import json
 import secrets
 import time
 from pathlib import Path
+from typing import Optional
 from urllib.parse import parse_qs, quote
 
 import uvicorn
@@ -32,6 +33,13 @@ from dashboard_data import (
 )
 from database import QuoteSnapshot, get_db, init_db
 from market_data import load_daily_bars, normalize_stock_code
+from paper_trading import (
+    PaperTradingError,
+    cancel_paper_order,
+    load_paper_dashboard,
+    paper_owner_user_id,
+    submit_paper_order,
+)
 from settings import ConfigError, load_config
 
 logger = logging.getLogger(__name__)
@@ -45,6 +53,22 @@ app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="stat
 SESSION_COOKIE_NAME = "ashare_session"
 SESSION_TTL_SECONDS = 12 * 60 * 60
 REMEMBER_SESSION_TTL_SECONDS = 30 * 24 * 60 * 60
+CSRF_TTL_SECONDS = 12 * 60 * 60
+
+PAPER_RESULT_MESSAGES = {
+    "order-created": ("ok", "委托已提交，等待交易时段的下一轮实时行情成交。"),
+    "order-cancelled": ("ok", "待成交委托已撤销。"),
+    "invalid-side": ("error", "委托方向无效。"),
+    "invalid-code": ("error", "股票代码必须是 1-6 位数字。"),
+    "invalid-quantity": ("error", "数量必须是 100 股的正整数倍。"),
+    "invalid-order-id": ("error", "委托标识失效，请刷新页面后重试。"),
+    "duplicate-order-conflict": ("error", "委托标识冲突，请刷新页面后重试。"),
+    "no-position": ("error", "没有可卖出的模拟持仓。"),
+    "insufficient-shares": ("error", "可卖数量不足，可能含当日买入或待卖股份。"),
+    "order-not-found": ("error", "委托不存在。"),
+    "order-not-pending": ("error", "只有待成交委托可以撤销。"),
+    "request-failed": ("error", "模拟盘操作失败，请稍后重试。"),
+}
 
 
 def _auth_settings() -> tuple[str, str, str]:
@@ -88,6 +112,20 @@ def _read_session_token(token: str, username: str, session_secret: str) -> bool:
         )
     except (ValueError, TypeError, json.JSONDecodeError):
         return False
+
+
+def _make_csrf_token(username: str, session_secret: str, expires_at: int) -> str:
+    return _make_session_token(f"paper:{username}", session_secret, expires_at)
+
+
+def _valid_csrf_token(token: str, username: str, session_secret: str) -> bool:
+    return _read_session_token(token, f"paper:{username}", session_secret)
+
+
+def _require_csrf(token: str, username: str) -> None:
+    _auth_username, _password, session_secret = _auth_settings()
+    if not _valid_csrf_token(token, username, session_secret):
+        raise HTTPException(status_code=403, detail="表单校验失败")
 
 
 def _valid_basic_auth(
@@ -272,6 +310,75 @@ def screener_page(
         name="screener.html",
         context={"data": data, "title": "自助选股"},
     )
+
+
+@app.get("/paper", response_class=HTMLResponse)
+def paper_page(
+    request: Request,
+    result: Optional[str] = Query(default=None),
+    username: str = Depends(require_auth),
+):
+    config = _config()
+    data = load_paper_dashboard(config)
+    _auth_username, _password, session_secret = _auth_settings()
+    csrf_token = _make_csrf_token(
+        username, session_secret, int(time.time()) + CSRF_TTL_SECONDS
+    )
+    data["csrf_token"] = csrf_token
+    data["buy_client_order_id"] = secrets.token_urlsafe(18)
+    for position in data["positions"]:
+        position["sell_client_order_id"] = secrets.token_urlsafe(18)
+    message = PAPER_RESULT_MESSAGES.get(result)
+    notice = {"tone": message[0], "text": message[1]} if message else None
+    return templates.TemplateResponse(
+        request=request,
+        name="paper.html",
+        context={"data": data, "notice": notice, "title": "模拟盘"},
+    )
+
+
+@app.post("/paper/orders")
+async def paper_order_submit(
+    request: Request,
+    username: str = Depends(require_auth),
+):
+    form = parse_qs((await request.body()).decode("utf-8", errors="replace"))
+    _require_csrf(form.get("csrf_token", [""])[0], username)
+    config = _config()
+    try:
+        submit_paper_order(
+            paper_owner_user_id(config),
+            form.get("side", [""])[0],
+            form.get("stock_code", [""])[0],
+            form.get("quantity", [""])[0],
+            form.get("client_order_id", [""])[0],
+        )
+        result = "order-created"
+    except PaperTradingError as exc:
+        result = exc.code if exc.code in PAPER_RESULT_MESSAGES else "request-failed"
+    except Exception as exc:
+        logger.error(f"提交模拟盘委托失败: {exc}")
+        result = "request-failed"
+    return RedirectResponse(f"/paper?result={result}", status_code=303)
+
+
+@app.post("/paper/orders/{order_id}/cancel")
+async def paper_order_cancel(
+    request: Request,
+    order_id: int,
+    username: str = Depends(require_auth),
+):
+    form = parse_qs((await request.body()).decode("utf-8", errors="replace"))
+    _require_csrf(form.get("csrf_token", [""])[0], username)
+    try:
+        cancel_paper_order(paper_owner_user_id(_config()), order_id)
+        result = "order-cancelled"
+    except PaperTradingError as exc:
+        result = exc.code if exc.code in PAPER_RESULT_MESSAGES else "request-failed"
+    except Exception as exc:
+        logger.error(f"撤销模拟盘委托失败: {exc}")
+        result = "request-failed"
+    return RedirectResponse(f"/paper?result={result}", status_code=303)
 
 
 @app.get("/stocks/{stock_code}", response_class=HTMLResponse)

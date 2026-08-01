@@ -598,6 +598,7 @@ def run_all_checks(quotes_df: pd.DataFrame, config: dict) -> tuple[list[Alert], 
 
     portfolio = config.get("portfolio", {})
     watchlist = config.get("watchlist", {})
+    paper_codes = set(config.get("_paper_codes", ()))
     signal_config = config.get("signal", {})
     full_market = config.get("full_market", {})
     
@@ -605,6 +606,7 @@ def run_all_checks(quotes_df: pd.DataFrame, config: dict) -> tuple[list[Alert], 
     if quotes_df is not None and full_market.get("enabled", False):
         scoring_config = full_market.get("scoring", {})
         min_score = scoring_config.get("min_score", 70)
+        candidate_codes = config.get("_full_market_candidate_codes")
         
         for _, row in quotes_df.iterrows():
             code = str(row["代码"]).zfill(6)
@@ -617,7 +619,10 @@ def run_all_checks(quotes_df: pd.DataFrame, config: dict) -> tuple[list[Alert], 
             score_details[code] = (score, reason)
             
             # 只推送高分股票
-            if score >= min_score:
+            is_scan_candidate = (
+                candidate_codes is None or code in candidate_codes
+            )
+            if is_scan_candidate and score >= min_score:
                 all_alerts.append(Alert(
                     stock_code=code,
                     stock_name=name,
@@ -652,6 +657,13 @@ def run_all_checks(quotes_df: pd.DataFrame, config: dict) -> tuple[list[Alert], 
                 name = watchlist[code]
                 signals, score, reason = generate_signal(row, name, signal_config)
                 all_alerts.extend(signals)
+                score_details[code] = (score, reason)
+
+            # 模拟盘复用同一套 V2 评分，但不会改变真实组合或产生额外通知。
+            if code in paper_codes and code not in score_details:
+                price = float(row.get("最新价", 0))
+                change_pct = float(row.get("涨跌幅", 0))
+                score, reason = calculate_score(code, price, change_pct)
                 score_details[code] = (score, reason)
 
     return all_alerts, score_details

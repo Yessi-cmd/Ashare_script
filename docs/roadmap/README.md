@@ -32,6 +32,8 @@
 | 11 | [研究台 UI 全面优化](11-ui-polish.md) | COMPLETE | 统一壳层、主题、响应式与页面层级 |
 | 12 | [荐股榜密度与扫描效率](12-recommendation-board-density.md) | COMPLETE | 单行榜单、横向比较、移动端堆叠 |
 | 13 | [移动端布局紧凑度与走势线修复](13-mobile-layout-compactness.md) | COMPLETE | 紧凑表单/头部/登录页、24px 走势线 |
+| 14 | [横截面选股与可实现组合回测](14-cross-sectional-selection.md) | COMPLETE | 横截面排名、有限持仓组合回测、样本外验证 |
+| 15 | [实时模拟盘与实盘对照](15-paper-trading.md) | COMPLETE | 1 万元模拟账户、实时撮合、持仓与订单账本 |
 
 ## 通用完成标准
 

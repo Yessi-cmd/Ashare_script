@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**A股个人研究与监控平台** monitors A-share prices, scores technical signals, manages a single owner's portfolio through a Telegram Bot, sends notifications, stores locally synchronized daily bars for reproducible research, and serves a read-only personal Web dashboard.
+**A股个人研究与监控平台** monitors A-share prices, scores technical signals, manages a single owner's portfolio through a Telegram Bot, sends notifications, stores locally synchronized daily bars for reproducible research, and serves a local-data Web dashboard with a paper-trading ledger.
 
 All user-facing dashboard, alert, and news text is Chinese. Normalize stock codes to six digits (`str(code).zfill(6)`).
 
@@ -52,7 +52,7 @@ python main.py --test
 # Telegram Bot; requires app.owner_user_id and Telegram credentials
 python bot.py
 
-# Read-only Web dashboard; requires all three environment variables
+# Local-data Web dashboard and paper trading; requires all three environment variables
 export ASHARE_WEB_USERNAME='...'
 export ASHARE_WEB_PASSWORD='...'
 export ASHARE_WEB_SESSION_SECRET='...'
@@ -77,6 +77,9 @@ python research.py walk-forward 000001 600519 300750 \
   --train-start 2024-01-01 --train-end 2025-06-30 \
   --validation-start 2025-07-01 --validation-end 2026-07-17 \
   --strategy v3 --thresholds 60,65,70,75,80
+python research.py portfolio-backtest 000001 000333 000858 002415 002475 \
+  002594 300059 300124 300750 600030 600036 600276 600519 601012 \
+  601088 601318 601899 603259 688981 --top-n 3 --rebalance-every 5
 
 # Create an online SQLite backup (defaults are suitable for deployment)
 python backup_database.py
@@ -132,11 +135,13 @@ AKShare primary/fallback sources
 
 `market_data.py` is the normalized local daily-bar repository. It validates OHLCV invariants, normalizes adjustment modes, uses source fallback/timeouts, and upserts data without discarding existing cache on fetch failure.
 
-`research.py` is the CLI entry point for synchronization, backtests, strategy comparisons, and walk-forward evaluation. Backtests generate a signal after a close and enter at the next trading day's open; commission, stamp duty, and slippage are included.
+`research.py` is the CLI entry point for synchronization, single-stock backtests, strategy comparisons, walk-forward evaluation, and the cross-sectional portfolio backtest. Backtests generate a signal after a close and enter at the next trading day's open; commission, stamp duty, and slippage are included.
 
 `strategy_v3.py` is a research candidate, not the live signal strategy. V3 may be used for research, comparison, and out-of-sample evaluation, but must not replace live V2 behavior in `strategies.py` without explicit approval and new auditable evidence.
 
-### 3. Read-only Web dashboard
+`cross_sectional_strategy.py` ranks same-day trend, skip-5-day momentum, volume confirmation, and low-volatility factors. `portfolio_backtest.py` simulates finite Top-K holdings and daily equity; its candidate is research-only until it passes multiple independent out-of-sample windows.
+
+### 3. Local-data Web dashboard and paper trading
 
 ```text
 QuoteSnapshot + DailyBar + personal holdings
@@ -148,6 +153,8 @@ QuoteSnapshot + DailyBar + personal holdings
 `web_app.py` is a FastAPI application with Basic Auth and signed session cookies. Its credentials come from `ASHARE_WEB_USERNAME`, `ASHARE_WEB_PASSWORD`, and `ASHARE_WEB_SESSION_SECRET`; Web authentication fails closed when they are missing.
 
 `dashboard_data.py` must remain read-only with respect to external market services: it reads only local SQLite snapshots, daily bars, and configured owner data. Do not add AKShare, RSS, or other external network calls to Web request paths. `sync_universe.py` maintains the data the dashboard/research views require.
+
+`paper_trading.py` owns the 10,000-yuan integer-fen paper ledger, market-order validation, fees, T+1, and valuation. Web requests only enqueue/cancel orders; `monitor.py` supplies realtime quotes and executes them during configured trading sessions. Paper-only symbols receive live V2 scores without creating notification alerts.
 
 `market_monitor.py` owns cross-market benchmark collection independently of A-share trading hours. It writes `MarketQuoteSnapshot` rows through `global_market_data.py`; the `/markets` page only reads those local rows.
 

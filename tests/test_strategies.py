@@ -9,10 +9,34 @@ from strategies import (
     check_portfolio,
     fetch_history,
     fetch_realtime_quotes,
+    run_all_checks,
 )
 
 
 class StrategyTests(unittest.TestCase):
+    @patch("strategies.calculate_score", return_value=(76, "模拟盘评分"))
+    def test_paper_only_symbol_is_scored_without_generating_alerts(self, calculate):
+        quotes = pd.DataFrame([{
+            "代码": "600519",
+            "名称": "贵州茅台",
+            "最新价": 10.0,
+            "涨跌幅": 1.0,
+        }])
+
+        alerts, details = run_all_checks(
+            quotes,
+            {
+                "portfolio": {},
+                "watchlist": {},
+                "_paper_codes": {"600519"},
+                "signal": {"buy_threshold": 70, "sell_threshold": 30},
+            },
+        )
+
+        self.assertEqual(alerts, [])
+        self.assertEqual(details, {"600519": (76, "模拟盘评分")})
+        calculate.assert_called_once_with("600519", 10.0, 1.0)
+
     def test_rsi_for_strictly_rising_series_is_overbought(self):
         closes = pd.Series(range(1, 31), dtype=float)
         self.assertEqual(_calc_rsi(closes), 100.0)

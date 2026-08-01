@@ -512,6 +512,79 @@ td strong { font-weight: 750; }
 .filter-check { padding: 0 2px; }
 .screener-table { min-width: 900px; }
 
+/* Paper trading */
+.paper-header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 24px;
+  margin-bottom: 22px;
+}
+.paper-header h1 { margin: 7px 0 0; font-family: var(--font-display); font-size: 38px; letter-spacing: -.045em; line-height: 1; }
+.paper-market-state { display: flex; align-items: center; gap: 10px; color: var(--muted); }
+.paper-market-state small { font-size: 11px; }
+.paper-notice { margin-bottom: 18px; padding: 12px 15px; border: 1px solid var(--line); border-radius: var(--radius-xs); font-size: 12px; }
+.paper-notice.ok { border-color: color-mix(in srgb, var(--negative) 35%, var(--line)); background: var(--negative-soft); color: var(--negative); }
+.paper-notice.error { border-color: color-mix(in srgb, var(--positive) 35%, var(--line)); background: var(--positive-soft); color: var(--danger); }
+.paper-metrics { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+.paper-workspace { display: grid; grid-template-columns: minmax(0, 1.45fr) minmax(280px, .75fr); gap: 16px; }
+.paper-workspace .panel { margin: 0; }
+.paper-order-form { display: grid; grid-template-columns: minmax(150px, 1fr) minmax(130px, .7fr) auto; align-items: end; gap: 12px; }
+.paper-order-form label { color: var(--muted-strong); font-size: 12px; font-weight: 650; }
+.paper-order-form input,
+.paper-sell-form input {
+  display: block;
+  width: 100%;
+  min-height: 42px;
+  margin-top: 7px;
+  padding: 0 11px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  outline: 0;
+  background: var(--surface-inset);
+  color: var(--text);
+  font: inherit;
+}
+.paper-order-form input:focus,
+.paper-sell-form input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.paper-hint, .paper-disclosure { margin: 13px 0 0; color: var(--muted); font-size: 10px; }
+.comparison-list { display: grid; gap: 0; margin: 0; }
+.comparison-list div { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; padding: 10px 0; border-bottom: 1px solid var(--line-soft); }
+.comparison-list div:last-child { border-bottom: 0; }
+.comparison-list dt { color: var(--muted); font-size: 11px; }
+.comparison-list dd { margin: 0; color: var(--text-soft); font-size: 14px; font-weight: 750; }
+.paper-position-panel { margin-top: 16px; }
+.paper-position-table { min-width: 1060px; }
+.paper-orders-table { min-width: 940px; }
+.paper-position-table td small, .paper-orders-table td small { margin-top: 3px; }
+.paper-action-cell { min-width: 174px; }
+.paper-sell-form { display: grid; grid-template-columns: 92px auto; align-items: end; justify-content: end; gap: 7px; }
+.paper-sell-form input { min-height: 34px; margin: 0; padding: 0 8px; }
+.secondary-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 40px;
+  padding: 0 14px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--surface-raised);
+  color: var(--text-soft);
+  font-weight: 750;
+  cursor: pointer;
+}
+.secondary-button:hover { border-color: var(--accent); color: var(--text); }
+.secondary-button.is-confirming, .text-button.is-confirming { color: var(--warning); }
+.secondary-button.is-confirming { border-color: var(--warning); }
+.compact-button { min-height: 34px; padding: 0 11px; font-size: 12px; }
+.muted-value { color: var(--muted); }
+.order-status { display: inline-flex; min-height: 22px; align-items: center; padding: 2px 7px; border: 1px solid var(--line); border-radius: 999px; color: var(--muted-strong); font-size: 10px; font-weight: 750; }
+.order-status.status-filled { border-color: color-mix(in srgb, var(--negative) 35%, transparent); color: var(--negative); }
+.order-status.status-rejected { border-color: color-mix(in srgb, var(--positive) 35%, transparent); color: var(--danger); }
+.order-status.status-cancelled { color: var(--muted); }
+.order-status.status-pending { border-color: color-mix(in srgb, var(--warning) 38%, transparent); color: var(--warning); }
+.reject-reason { max-width: 190px; overflow: hidden; text-overflow: ellipsis; }
+
 /* Research and market pages */
 .research-notice, .market-notice {
   display: flex;
@@ -679,6 +752,7 @@ td strong { font-weight: 750; }
   .filter-form { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .filter-form .primary-button { width: 100%; }
   .ashare-index-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .paper-metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
 @media (max-width: 1100px) {
   .recommendation-columns { display: none; }
@@ -701,6 +775,7 @@ td strong { font-weight: 750; }
   .topbar-actions { margin-left: auto; }
   .hero, .page-header { align-items: flex-start; }
   .market-grid { grid-template-columns: 1fr; }
+  .paper-workspace { grid-template-columns: 1fr; }
   .login-shell { grid-template-columns: 1fr; width: min(620px, 100%); gap: 38px; }
   .login-brand { margin-bottom: 36px; }
   .login-copy h1 { font-size: clamp(40px, 8vw, 58px); }
@@ -722,6 +797,7 @@ td strong { font-weight: 750; }
   .market-tape-item:nth-child(n + 3) { border-top: 1px solid var(--line-soft); }
   .market-tape-item:nth-child(even) { border-left: 1px solid var(--line-soft); }
   .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .paper-header { align-items: flex-start; }
   .watch-grid, .candidate-grid { grid-template-columns: 1fr; }
   /* Single-column mobile grids no longer need fixed min-heights to align cards. */
   .candidate-card > p { min-height: 0; }
@@ -758,6 +834,7 @@ td strong { font-weight: 750; }
   .metrics { gap: 9px; }
   .metrics article { padding: 14px; }
   .metrics strong { font-size: 19px; }
+  .paper-metrics article:last-child { grid-column: 1 / -1; }
   .section-title { align-items: flex-start; }
   .section-title > a { font-size: 11px; }
   .argument-grid { grid-template-columns: 1fr; gap: 16px; }
@@ -777,6 +854,45 @@ td strong { font-weight: 750; }
   .filter-form { grid-template-columns: 1fr 1fr; }
   .filter-form .filter-check { grid-column: 1 / -1; }
   .filter-form .primary-button { grid-column: 1 / -1; }
+  .paper-header { display: block; }
+  .paper-market-state { margin-top: 12px; }
+  .paper-order-form { grid-template-columns: 1fr 1fr; }
+  .paper-order-form .primary-button { grid-column: 1 / -1; width: 100%; }
+  .paper-position-table,
+  .paper-orders-table { display: block; min-width: 0; }
+  .paper-position-table thead,
+  .paper-orders-table thead { display: none; }
+  .paper-position-table tbody,
+  .paper-orders-table tbody { display: block; }
+  .paper-position-table tr,
+  .paper-orders-table tr { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 18px; padding: 9px 12px; border-bottom: 1px solid var(--line-soft); }
+  .paper-position-table tr:last-child,
+  .paper-orders-table tr:last-child { border-bottom: 0; }
+  .paper-position-table td,
+  .paper-orders-table td {
+    display: block;
+    min-width: 0;
+    padding: 7px 0;
+    border: 0;
+    text-align: left;
+    white-space: normal;
+  }
+  .paper-position-table td::before,
+  .paper-orders-table td::before { display: block; margin-bottom: 3px; color: var(--muted); font-size: 9px; font-weight: 700; text-align: left; content: attr(data-label); }
+  .paper-position-table td > *,
+  .paper-orders-table td > * { justify-self: start; }
+  .paper-position-table td a { text-align: left; }
+  .paper-position-table td[data-label="成本价"],
+  .paper-position-table .paper-action-cell { grid-column: 1 / -1; }
+  .paper-position-table .paper-action-cell { display: grid; grid-template-columns: 88px minmax(0, 1fr); align-items: center; min-width: 0; }
+  .paper-position-table .paper-action-cell::before { margin: 0; }
+  .paper-sell-form { width: min(204px, 100%); }
+  .paper-position-panel .table-wrap,
+  .paper-orders-panel .table-wrap { overflow: hidden; }
+  .paper-position-table .empty,
+  .paper-orders-table .empty { display: block; text-align: center; }
+  .paper-position-table .empty::before,
+  .paper-orders-table .empty::before { content: none; }
   .login-body { padding: 18px; }
   .login-theme-toggle { top: 14px; right: 14px; }
   /* Tighten vertical rhythm so the login shell fits a 844px viewport without scrolling. */
