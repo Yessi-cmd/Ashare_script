@@ -512,6 +512,33 @@ td strong { font-weight: 750; }
 .filter-check { padding: 0 2px; }
 .screener-table { min-width: 900px; }
 
+/* Strategy backtest */
+.strategy-metrics { margin-top: 22px; }
+.strategy-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 18px;
+  background: var(--warning-bg, rgba(255,193,7,.12));
+  border-radius: var(--radius);
+  color: var(--warning, #ffc107);
+  font-size: 15px;
+}
+.strategy-error .error-icon { font-size: 22px; flex-shrink: 0; }
+.strategy-error strong { display: block; margin-bottom: 4px; }
+.strategy-error p { margin: 0; color: var(--muted); font-size: 14px; }
+.strategy-chart {
+  padding: 12px 0;
+  width: 100%;
+}
+.equity-sparkline {
+  width: 100%;
+  height: auto;
+  max-height: 200px;
+  background: var(--surface);
+  border-radius: calc(var(--radius) * .5);
+}
+
 /* Paper trading */
 .paper-header {
   display: flex;

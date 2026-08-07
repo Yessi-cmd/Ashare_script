@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="hero compact">
+  <div>
+    <p class="eyebrow">BACKTEST · DUAL MA</p>
+    <h1>策略回测</h1>
+    <p>双均线金叉/死叉策略，基于本地日线数据，含 A 股真实费率。</p>
+  </div>
+</section>
+
+<section class="panel filter-panel">
+  <form method="get" action="/strategy" class="filter-form">
+    <label for="stock-code">股票代码<input id="stock-code" type="text" name="stock_code" inputmode="numeric" autocomplete="off" pattern="[0-9]{1,6}" maxlength="6" placeholder="000001" value="{{ stock_code }}" required></label>
+    <label for="fast-ma">快线周期<input id="fast-ma" type="number" name="fast" min="2" max="120" value="{{ fast }}" required></label>
+    <label for="slow-ma">慢线周期<input id="slow-ma" type="number" name="slow" min="3" max="250" value="{{ slow }}" required></label>
+    <label for="start-date">起始日期<input id="start-date" type="date" name="start" value="{{ start_date }}"></label>
+    <label for="end-date">结束日期<input id="end-date" type="date" name="end" value="{{ end_date }}"></label>
+    <label for="init-cash">起始资金<input id="init-cash" type="number" name="cash" min="10000" max="10000000" step="10000" value="{{ initial_cash }}"></label>
+    <button class="primary-button" type="submit">运行回测</button>
+  </form>
+</section>
+
+{% if error %}
+<section class="panel">
+  <div class="strategy-error" role="alert">
+    <span class="error-icon" aria-hidden="true">⚠</span>
+    <div><strong>回测未产生交易</strong><p>{{ error }}</p></div>
+  </div>
+</section>
+{% endif %}
+
+{% if has_result %}
+<section class="metrics strategy-metrics" aria-label="回测指标">
+  <article>
+    <span>总收益率</span>
+    <strong class="{{ 'up' if total_return_pct >= 0 else 'down' }}">{{ '%+.2f'|format(total_return_pct) }}%</strong>
+    <small>{% if first_date and last_date %}{{ first_date }} → {{ last_date }}{% endif %}</small>
+  </article>
+  <article>
+    <span>夏普比率</span>
+    <strong>{{ '%.3f'|format(sharpe_ratio) if sharpe_ratio is not none else 'N/A' }}</strong>
+    <small>无风险利率 2%</small>
+  </article>
+  <article>
+    <span>最大回撤</span>
+    <strong class="down">{{ '%.2f'|format(max_drawdown) }}%</strong>
+    <small>持续 {{ max_drawdown_len }} 天</small>
+  </article>
+  <article>
+    <span>胜率</span>
+    <strong>{{ '%.1f'|format(win_rate) }}%</strong>
+    <small>{{ won }}赢 / {{ lost }}输</small>
+  </article>
+  <article>
+    <span>交易次数</span>
+    <strong>{{ total_trades }}</strong>
+    <small>{{ equity_points }} 根日线</small>
+  </article>
+  <article>
+    <span>总净利</span>
+    <strong class="{{ 'up' if net_profit >= 0 else 'down' }}">{{ '%+.0f'|format(net_profit) }} 元</strong>
+    <small>毛利 {{ '%+.0f'|format(gross_profit) }} 元</small>
+  </article>
+</section>
+
+{% if sparkline %}
+<section class="panel">
+  <div class="section-title"><div><h2>权益曲线</h2><p>每根日线收盘后的账户总资产</p></div><span>{{ start_value | int }} → {{ end_value | int }} 元</span></div>
+  <div class="strategy-chart">
+    <svg viewBox="0 0 {{ sparkline_width }} {{ sparkline_height }}" class="equity-sparkline" aria-label="权益曲线" role="img">
+      <polyline fill="none" stroke="var(--accent)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" points="{{ sparkline }}"/>
+      <line x1="0" y1="{{ sparkline_height }}" x2="{{ sparkline_width }}" y2="{{ sparkline_height }}" stroke="var(--muted)" stroke-width="0.5" opacity="0.3"/>
+    </svg>
+  </div>
+</section>
+{% endif %}
+{% endif %}
+
+<p class="scope-note">回测基于本地 SQLite 前复权日线数据；费用含万三佣金（最低 5 元）、卖出千 0.5 印花税及 0.1% 滑点。回测结果不代表未来表现。</p>
+{% endblock %}

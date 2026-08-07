@@ -16,7 +16,7 @@
       }
     })();
   </script>
-  <link rel="stylesheet" href="{{ url_for('static', path='/app.css') }}?v=14">
+  <link rel="stylesheet" href="{{ url_for('static', path='/app.css') }}?v=15">
 </head>
 <body data-page="{{ request.url.path }}">
   <a class="skip-link" href="#main-content">跳到主要内容</a>
@@ -32,6 +32,7 @@
         <a class="nav-link {{ 'is-active' if current_path == '/paper' else '' }}" href="/paper" {% if current_path == '/paper' %}aria-current="page"{% endif %}><span class="nav-glyph" aria-hidden="true">▣</span><span>模拟盘</span></a>
         <a class="nav-link {{ 'is-active' if current_path == '/markets' else '' }}" href="/markets" {% if current_path == '/markets' %}aria-current="page"{% endif %}><span class="nav-glyph" aria-hidden="true">◌</span><span>全球市场</span></a>
         <a class="nav-link {{ 'is-active' if current_path == '/recommendations' else '' }}" href="/recommendations" {% if current_path == '/recommendations' %}aria-current="page"{% endif %}><span class="nav-glyph" aria-hidden="true">✦</span><span>荐股研究</span></a>
+        <a class="nav-link {{ 'is-active' if current_path == '/strategy' else '' }}" href="/strategy" {% if current_path == '/strategy' %}aria-current="page"{% endif %}><span class="nav-glyph" aria-hidden="true">⟐</span><span>策略回测</span></a>
         <a class="nav-link {{ 'is-active' if current_path == '/screener' else '' }}" href="/screener" {% if current_path == '/screener' %}aria-current="page"{% endif %}><span class="nav-glyph" aria-hidden="true">⌕</span><span>自助选股</span></a>
         <a class="nav-link {{ 'is-active' if current_path == '/system' else '' }}" href="/system" {% if current_path == '/system' %}aria-current="page"{% endif %}><span class="nav-glyph" aria-hidden="true">◈</span><span>系统</span></a>
       </nav>

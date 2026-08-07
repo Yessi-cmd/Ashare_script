@@ -31,6 +31,7 @@ from dashboard_data import (
     load_stock_summary,
     load_system_status,
 )
+from backtest_bt import run_backtest_web
 from database import QuoteSnapshot, get_db, init_db
 from market_data import load_daily_bars, normalize_stock_code
 from paper_trading import (
@@ -309,6 +310,103 @@ def screener_page(
         request=request,
         name="screener.html",
         context={"data": data, "title": "自助选股"},
+    )
+
+
+def _sparkline_svg(values: list[float], width: int = 720, height: int = 180) -> str:
+    """Return SVG polyline points for an equity-curve sparkline."""
+    if len(values) < 2:
+        return ""
+    low = min(values)
+    high = max(values)
+    span = high - low or 1.0
+    last_index = len(values) - 1
+    points = []
+    for idx, val in enumerate(values):
+        x = idx / last_index * width
+        y = height - ((val - low) / span * (height - 8) + 4)
+        points.append(f"{x:.1f},{y:.1f}")
+    return " ".join(points)
+
+
+@app.get("/strategy", response_class=HTMLResponse)
+def strategy_page(
+    request: Request,
+    stock_code: str = Query(default=""),
+    fast: int = Query(default=5, ge=2, le=120),
+    slow: int = Query(default=20, ge=3, le=250),
+    start: str = Query(default=""),
+    end: str = Query(default=""),
+    cash: float = Query(default=100_000.0, ge=10_000, le=10_000_000),
+    _username: str = Depends(require_auth),
+):
+    context: dict = {
+        "title": "策略回测",
+        "stock_code": stock_code,
+        "fast": fast,
+        "slow": slow,
+        "start_date": start,
+        "end_date": end,
+        "initial_cash": int(cash),
+        "has_result": False,
+        "error": "",
+        "total_return_pct": 0.0,
+        "sharpe_ratio": None,
+        "max_drawdown": 0.0,
+        "max_drawdown_len": 0,
+        "win_rate": 0.0,
+        "won": 0,
+        "lost": 0,
+        "total_trades": 0,
+        "gross_profit": 0.0,
+        "net_profit": 0.0,
+        "first_date": "",
+        "last_date": "",
+        "start_value": 0.0,
+        "end_value": 0.0,
+        "equity_points": 0,
+        "sparkline": "",
+        "sparkline_width": 720,
+        "sparkline_height": 180,
+    }
+
+    if stock_code:
+        result = run_backtest_web(
+            stock_code=stock_code,
+            fast=fast,
+            slow=slow,
+            start_date=start,
+            end_date=end,
+            initial_cash=cash,
+        )
+        context["error"] = result["error"]
+        if result["ok"]:
+            context["has_result"] = True
+            context.update({
+                "total_return_pct": result["total_return_pct"],
+                "sharpe_ratio": result["sharpe_ratio"],
+                "max_drawdown": result["max_drawdown"],
+                "max_drawdown_len": result["max_drawdown_len"],
+                "win_rate": result["win_rate"],
+                "won": result["won"],
+                "lost": result["lost"],
+                "total_trades": result["total_trades"],
+                "gross_profit": result["gross_profit"],
+                "net_profit": result["net_profit"],
+                "first_date": result["first_date"],
+                "last_date": result["last_date"],
+                "start_value": result["start_value"],
+                "end_value": result["end_value"],
+                "equity_points": len(result["equity_curve"]),
+            })
+            if result["equity_curve"]:
+                values = [p["value"] for p in result["equity_curve"]]
+                context["sparkline"] = _sparkline_svg(values)
+
+    return templates.TemplateResponse(
+        request=request,
+        name="strategy.html",
+        context=context,
     )
 
 
