@@ -29,12 +29,14 @@ export ASHARE_WEB_PASSWORD='使用长随机密码'
 export ASHARE_WEB_SESSION_SECRET='另一段至少32字节的随机值'
 # 分享给朋友时开启邀请码注册
 export ASHARE_WEB_REGISTRATION_CODE='使用长随机邀请码'
+# 可选：指定已有 Web 用户为管理员；遗留 owner 账号会自动成为管理员
+export ASHARE_WEB_ADMIN_USERNAME='owner'
 python web_app.py
 ```
 
 浏览 `http://127.0.0.1:8000`。监控进程运行一轮后，首页会显示本地持仓/关注池行情快照；Web 自身不会调用 AKShare。
 
-朋友打开公网地址后可以使用邀请码注册独立账号；每个账号的 `/account` 个人持仓/关注池和 `/paper` 模拟账户分别保存。公共行情快照和研究日线共享，旧的 `ASHARE_WEB_USERNAME` / `ASHARE_WEB_PASSWORD` 账号会在首次成功登录时自动迁移。
+管理员登录后可以在 `/admin` 添加用户、启用/停用、重置普通用户密码和删除用户。朋友打开公网地址后也可以使用邀请码注册独立账号；每个账号的 `/account` 个人持仓/关注池和 `/paper` 模拟账户分别保存。公共行情快照和研究日线共享，旧的 `ASHARE_WEB_USERNAME` / `ASHARE_WEB_PASSWORD` 账号会在首次成功登录时自动迁移并成为管理员。
 
 `/paper` 首次打开会创建 10,000 元模拟账户。买卖委托由持续运行的 `monitor.py` 在交易时段下一轮行情中处理；买入按 100 股整手，卖出遵守 T+1，`--test` 不会成交。
 

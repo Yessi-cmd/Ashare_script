@@ -37,6 +37,8 @@ sudoedit /etc/ashare-monitor/ashare.env
 
 如果要邀请朋友使用网页，设置 `ASHARE_WEB_REGISTRATION_CODE` 为一段长随机邀请码，并只通过私下渠道分享；留空会关闭网页注册。朋友注册后会获得独立的网页账号、持仓/关注池和模拟盘，公共行情快照仍由所有用户共享采集结果。
 
+管理员登录后打开 `/admin` 即可添加和管理普通用户。已有 `ASHARE_WEB_USERNAME` 账号在首次成功登录时自动成为管理员；如果部署不使用遗留环境账号，可在环境文件中设置 `ASHARE_WEB_ADMIN_USERNAME` 指向已有 Web 用户。管理员不能停用/删除自己，遗留环境账号的密码仍需修改 `ASHARE_WEB_PASSWORD` 后重启服务。
+
 ## 3. 上线前验证
 
 ```bash

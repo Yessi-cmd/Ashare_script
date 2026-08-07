@@ -36,6 +36,7 @@
         <a class="nav-link {{ 'is-active' if current_path == '/strategy' else '' }}" href="/strategy" {% if current_path == '/strategy' %}aria-current="page"{% endif %}><span class="nav-glyph" aria-hidden="true">⟐</span><span>策略回测</span></a>
         <a class="nav-link {{ 'is-active' if current_path == '/screener' else '' }}" href="/screener" {% if current_path == '/screener' %}aria-current="page"{% endif %}><span class="nav-glyph" aria-hidden="true">⌕</span><span>自助选股</span></a>
         <a class="nav-link {{ 'is-active' if current_path == '/system' else '' }}" href="/system" {% if current_path == '/system' %}aria-current="page"{% endif %}><span class="nav-glyph" aria-hidden="true">◈</span><span>系统</span></a>
+        {% if request.state.web_user.is_admin %}<a class="nav-link {{ 'is-active' if current_path == '/admin' else '' }}" href="/admin" {% if current_path == '/admin' %}aria-current="page"{% endif %}><span class="nav-glyph" aria-hidden="true">♙</span><span>用户管理</span></a>{% endif %}
       </nav>
       <div class="topbar-actions">
         <span class="topbar-user" title="当前登录用户">{{ request.state.web_user.username }}</span>

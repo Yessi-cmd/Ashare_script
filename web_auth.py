@@ -16,13 +16,25 @@ from pathlib import Path
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy import func
 
-from database import User, WebUser, get_db, init_db
+from database import (
+    AlertState,
+    PaperAccount,
+    PaperOrder,
+    PaperPosition,
+    Portfolio,
+    User,
+    Watchlist,
+    WebUser,
+    get_db,
+    init_db,
+)
 
 LOGIN_USERNAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{2,31}$")
 PASSWORD_SCHEME = "pbkdf2_sha256"
 PASSWORD_ITERATIONS = 260_000
 PASSWORD_SALT_BYTES = 16
 REGISTRATION_CODE_ENV = "ASHARE_WEB_REGISTRATION_CODE"
+ADMIN_USERNAME_ENV = "ASHARE_WEB_ADMIN_USERNAME"
 
 
 class WebAuthError(ValueError):
@@ -40,6 +52,7 @@ class WebPrincipal:
     user_id: int
     username: str
     legacy_env: bool = False
+    is_admin: bool = False
 
 
 def normalize_login_username(value: str) -> str:
@@ -50,6 +63,20 @@ def normalize_login_username(value: str) -> str:
             "用户名需为 3-32 位字母、数字、点、短横线或下划线",
         )
     return username.lower()
+
+
+def _configured_admin_username() -> str | None:
+    raw_username = os.getenv(ADMIN_USERNAME_ENV, "").strip()
+    if not raw_username:
+        return None
+    try:
+        return normalize_login_username(raw_username)
+    except WebAuthError:
+        return None
+
+
+def _is_configured_admin(username: str) -> bool:
+    return _configured_admin_username() == str(username).strip().lower()
 
 
 def validate_registration_password(value: str) -> str:
@@ -186,6 +213,7 @@ def _principal(account: WebUser) -> WebPrincipal:
         user_id=int(account.user_id),
         username=account.login_username,
         legacy_env=bool(account.legacy_env),
+        is_admin=bool(getattr(account, "is_admin", False)),
     )
 
 
@@ -213,6 +241,15 @@ def ensure_legacy_web_user() -> WebPrincipal | None:
             WebUser.login_username == username
         ).first()
         if account is not None:
+            changed = False
+            if account.legacy_env and not account.is_admin:
+                account.is_admin = True
+                changed = True
+            if _is_configured_admin(account.login_username) and not account.is_admin:
+                account.is_admin = True
+                changed = True
+            if changed:
+                db.commit()
             return _principal(account)
 
         data_user_id = _legacy_data_user_id()
@@ -226,6 +263,8 @@ def ensure_legacy_web_user() -> WebPrincipal | None:
             login_username=username,
             password_hash=hash_password(password),
             legacy_env=True,
+            is_admin=True,
+            is_active=True,
         )
         db.add(account)
         db.commit()
@@ -255,6 +294,14 @@ def authenticate_web_user(username: str, password: str) -> WebPrincipal | None:
             WebUser.login_username == normalized
         ).first()
         if account is not None:
+            if not account.is_active:
+                return None
+            if (
+                (account.legacy_env or _is_configured_admin(account.login_username))
+                and not account.is_admin
+            ):
+                account.is_admin = True
+                db.commit()
             if verify_password(password, account.password_hash):
                 return _principal(account)
             legacy = _legacy_credentials()
@@ -284,7 +331,15 @@ def load_web_principal(user_id: int, username: str) -> WebPrincipal | None:
             WebUser.user_id == int(user_id),
             WebUser.login_username == str(username),
         ).first()
-        return _principal(account) if account is not None else None
+        if account is None or not account.is_active:
+            return None
+        if (
+            (account.legacy_env or _is_configured_admin(account.login_username))
+            and not account.is_admin
+        ):
+            account.is_admin = True
+            db.commit()
+        return _principal(account)
     finally:
         db.close()
 
@@ -319,6 +374,8 @@ def register_web_user(
             login_username=normalized,
             password_hash=hash_password(checked_password),
             legacy_env=False,
+            is_admin=_is_configured_admin(normalized),
+            is_active=True,
         )
         db.add(account)
         db.commit()
@@ -330,5 +387,152 @@ def register_web_user(
     except IntegrityError as exc:
         db.rollback()
         raise WebAuthError("username-taken", "用户名已存在，请换一个") from exc
+    finally:
+        db.close()
+
+
+def list_web_users() -> list[dict]:
+    """Return safe account summaries for the administrator page."""
+    init_db()
+    db = get_db()
+    try:
+        accounts = db.query(WebUser).order_by(
+            WebUser.created_at.asc(), WebUser.login_username.asc()
+        ).all()
+        return [
+            {
+                "user_id": int(account.user_id),
+                "username": account.login_username,
+                "legacy_env": bool(account.legacy_env),
+                "is_admin": bool(account.is_admin),
+                "is_active": bool(account.is_active),
+                "created_at": account.created_at,
+                "portfolio_count": db.query(func.count(Portfolio.id)).filter(
+                    Portfolio.user_id == account.user_id
+                ).scalar() or 0,
+                "watchlist_count": db.query(func.count(Watchlist.id)).filter(
+                    Watchlist.user_id == account.user_id
+                ).scalar() or 0,
+                "paper_order_count": db.query(func.count(PaperOrder.id)).filter(
+                    PaperOrder.owner_user_id == account.user_id
+                ).scalar() or 0,
+            }
+            for account in accounts
+        ]
+    finally:
+        db.close()
+
+
+def admin_create_web_user(username: str, password: str) -> WebPrincipal:
+    """Create an enabled, non-admin account without requiring an invite code."""
+    normalized = normalize_login_username(username)
+    checked_password = validate_registration_password(password)
+    init_db()
+    db = get_db()
+    try:
+        if db.query(WebUser).filter(
+            WebUser.login_username == normalized
+        ).first() is not None:
+            raise WebAuthError("username-taken", "用户名已存在，请换一个")
+        user = User(user_id=_next_web_user_id(db), username=normalized)
+        db.add(user)
+        db.flush()
+        account = WebUser(
+            user_id=user.user_id,
+            login_username=normalized,
+            password_hash=hash_password(checked_password),
+            legacy_env=False,
+            is_admin=False,
+            is_active=True,
+        )
+        db.add(account)
+        db.commit()
+        db.refresh(account)
+        return _principal(account)
+    except WebAuthError:
+        db.rollback()
+        raise
+    except IntegrityError as exc:
+        db.rollback()
+        raise WebAuthError("username-taken", "用户名已存在，请换一个") from exc
+    finally:
+        db.close()
+
+
+def set_web_user_active(
+    actor_user_id: int,
+    target_user_id: int,
+    active: bool,
+) -> None:
+    """Enable or suspend another account without locking out the actor."""
+    init_db()
+    db = get_db()
+    try:
+        if int(actor_user_id) == int(target_user_id):
+            raise WebAuthError("cannot-change-self", "不能停用当前管理员账号")
+        account = db.get(WebUser, int(target_user_id))
+        if account is None:
+            raise WebAuthError("user-not-found", "用户不存在")
+        if not active and account.is_admin:
+            active_admins = db.query(func.count(WebUser.user_id)).filter(
+                WebUser.is_admin.is_(True),
+                WebUser.is_active.is_(True),
+            ).scalar() or 0
+            if active_admins <= 1:
+                raise WebAuthError("last-admin", "至少需要保留一个启用中的管理员")
+        account.is_active = bool(active)
+        db.commit()
+    finally:
+        db.close()
+
+
+def reset_web_user_password(target_user_id: int, password: str) -> None:
+    """Reset a regular account password from the administrator page."""
+    checked_password = validate_registration_password(password)
+    init_db()
+    db = get_db()
+    try:
+        account = db.get(WebUser, int(target_user_id))
+        if account is None:
+            raise WebAuthError("user-not-found", "用户不存在")
+        if account.is_admin:
+            raise WebAuthError("cannot-manage-admin", "管理员账号请通过服务端配置管理")
+        if account.legacy_env:
+            raise WebAuthError("legacy-password", "遗留环境账号密码由服务端环境变量管理")
+        account.password_hash = hash_password(checked_password)
+        db.commit()
+    finally:
+        db.close()
+
+
+def delete_web_user(actor_user_id: int, target_user_id: int) -> None:
+    """Delete a regular account and all data owned by it."""
+    init_db()
+    db = get_db()
+    try:
+        if int(actor_user_id) == int(target_user_id):
+            raise WebAuthError("cannot-delete-self", "不能删除当前管理员账号")
+        account = db.get(WebUser, int(target_user_id))
+        if account is None:
+            raise WebAuthError("user-not-found", "用户不存在")
+        if account.is_admin:
+            raise WebAuthError("cannot-manage-admin", "不能删除其他管理员账号")
+
+        db.query(PaperPosition).filter(
+            PaperPosition.owner_user_id == target_user_id
+        ).delete(synchronize_session=False)
+        db.query(PaperOrder).filter(
+            PaperOrder.owner_user_id == target_user_id
+        ).delete(synchronize_session=False)
+        db.query(PaperAccount).filter(
+            PaperAccount.owner_user_id == target_user_id
+        ).delete(synchronize_session=False)
+        db.query(AlertState).filter(
+            AlertState.owner_user_id == target_user_id
+        ).delete(synchronize_session=False)
+        user = db.get(User, int(target_user_id))
+        if user is not None:
+            db.delete(user)
+        db.commit()
     finally:
         db.close()

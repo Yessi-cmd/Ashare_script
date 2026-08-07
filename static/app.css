@@ -626,6 +626,50 @@ td strong { font-weight: 750; }
 .account-form .primary-button { grid-column: 1 / -1; justify-self: start; }
 .account-table { min-width: 650px; }
 
+/* Administrator console */
+.admin-header { display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; margin-bottom: 22px; }
+.admin-header .pill { margin-bottom: 4px; }
+.admin-summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-bottom: 16px; }
+.admin-stat { min-width: 0; padding: 17px 19px; border: 1px solid var(--line-soft); border-radius: var(--radius-md); background: var(--surface-soft); }
+.admin-stat span, .admin-stat small { display: block; color: var(--muted); font-size: 11px; }
+.admin-stat strong { display: block; margin: 5px 0 2px; color: var(--text); font-family: var(--font-display); font-size: 29px; letter-spacing: -.045em; line-height: 1; }
+.admin-create-grid { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(250px, .65fr); gap: 16px; }
+.admin-create-grid .panel { margin: 0; }
+.admin-create-form { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: end; gap: 12px; }
+.admin-create-form label { color: var(--muted-strong); font-size: 12px; font-weight: 650; }
+.admin-create-form input { display: block; width: 100%; min-height: 42px; margin-top: 7px; padding: 0 11px; border: 1px solid var(--line); border-radius: 8px; outline: 0; background: var(--surface-inset); color: var(--text); font: inherit; }
+.admin-create-form input:focus, .admin-password-form input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.admin-create-form .primary-button { grid-column: 1 / -1; justify-self: start; }
+.admin-note { display: flex; align-items: flex-start; gap: 12px; margin: 0; padding: 19px; border: 1px solid color-mix(in srgb, var(--accent) 27%, var(--line)); border-radius: var(--radius-lg); background: var(--accent-wash); color: var(--muted-strong); }
+.admin-note-icon { display: grid; flex: none; width: 28px; height: 28px; place-items: center; border-radius: 9px; background: var(--accent-soft); color: var(--accent); font-size: 16px; }
+.admin-note strong { color: var(--text); font-size: 13px; }
+.admin-note p { margin: 8px 0 0; font-size: 11px; line-height: 1.65; }
+.admin-note code { color: var(--accent); font-size: 10px; }
+.admin-users-panel { margin-top: 16px; }
+.admin-users-table { min-width: 980px; }
+.admin-users-table td { white-space: normal; vertical-align: top; }
+.admin-users-table td small { display: block; margin-top: 4px; color: var(--muted); font-size: 10px; }
+.admin-user-identity { display: grid; gap: 6px; }
+.admin-user-identity strong { color: var(--text); font-size: 14px; }
+.admin-user-identity > div { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.admin-role, .admin-legacy, .admin-status { display: inline-flex; align-items: center; min-height: 21px; padding: 2px 7px; border: 1px solid var(--line); border-radius: 999px; font-size: 10px; font-weight: 750; line-height: 1; white-space: nowrap; }
+.admin-role { border-color: color-mix(in srgb, var(--accent) 35%, transparent); background: var(--accent-soft); color: var(--accent); }
+.admin-legacy { border-color: color-mix(in srgb, var(--warning) 35%, transparent); background: var(--warning-soft); color: var(--warning); }
+.admin-status.is-active { border-color: color-mix(in srgb, var(--negative) 35%, transparent); background: var(--negative-soft); color: var(--negative); }
+.admin-status.is-inactive { border-color: color-mix(in srgb, var(--positive) 35%, transparent); background: var(--positive-soft); color: var(--danger); }
+.admin-actions { display: flex; align-items: center; justify-content: flex-start; flex-wrap: wrap; gap: 8px; min-width: 300px; }
+.admin-actions form { margin: 0; }
+.admin-current { color: var(--muted); font-size: 11px; }
+.danger-text { color: var(--danger); }
+.danger-text:hover { color: var(--text); }
+.admin-password-details { position: relative; }
+.admin-password-details summary { min-height: 34px; padding: 7px 10px; border: 1px solid var(--line-strong); border-radius: 8px; color: var(--text-soft); cursor: pointer; font-size: 12px; font-weight: 750; list-style: none; }
+.admin-password-details summary::-webkit-details-marker { display: none; }
+.admin-password-details summary::after { margin-left: 6px; color: var(--muted); content: "⌄"; }
+.admin-password-details[open] summary { border-color: var(--accent); color: var(--accent); }
+.admin-password-form { position: absolute; z-index: 4; top: calc(100% + 7px); right: 0; display: grid; grid-template-columns: 112px 112px auto; align-items: end; gap: 6px; width: 360px; padding: 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-raised); box-shadow: var(--shadow-md); }
+.admin-password-form input { width: 100%; min-height: 34px; padding: 0 8px; border: 1px solid var(--line); border-radius: 7px; outline: 0; background: var(--surface-inset); color: var(--text); font: inherit; font-size: 11px; }
+
 /* Research and market pages */
 .research-notice, .market-notice {
   display: flex;
@@ -823,6 +867,7 @@ td strong { font-weight: 750; }
   .paper-workspace { grid-template-columns: 1fr; }
   .account-grid { grid-template-columns: 1fr; }
   .account-grid .panel { margin-bottom: 0; }
+  .admin-create-grid { grid-template-columns: 1fr; }
   .login-shell { grid-template-columns: 1fr; width: min(620px, 100%); gap: 38px; }
   .login-brand { margin-bottom: 36px; }
   .login-copy h1 { font-size: clamp(40px, 8vw, 58px); }
@@ -871,6 +916,14 @@ td strong { font-weight: 750; }
   footer { flex-wrap: wrap; gap: 5px 7px; padding-right: 14px; padding-left: 14px; }
   .footer-separator { display: none; }
   .overview-title h1 { font-size: 27px; }
+  .admin-header { display: block; }
+  .admin-header .pill { margin-top: 14px; }
+  .admin-summary { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+  .admin-stat { padding: 13px; }
+  .admin-stat strong { font-size: 24px; }
+  .admin-create-form { grid-template-columns: 1fr; }
+  .admin-create-form .primary-button { grid-column: auto; width: 100%; }
+  .admin-password-form { position: fixed; top: 50%; right: 14px; left: 14px; grid-template-columns: 1fr; width: auto; transform: translateY(-50%); }
   .overview-meta { display: flex; align-items: flex-start; flex-wrap: wrap; gap: 10px 14px; }
   .freshness-inline { margin-top: 0; }
   .market-strip { padding: 16px 14px; }

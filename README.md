@@ -129,10 +129,12 @@ export ASHARE_WEB_PASSWORD='密码管理器生成的长随机密码'
 export ASHARE_WEB_SESSION_SECRET='另一段至少32字节的随机值'
 # 需要邀请朋友注册时配置；邀请码本身不要提交到仓库
 export ASHARE_WEB_REGISTRATION_CODE='一段长随机邀请码'
+# 可选：指定已有 Web 用户为管理员；遗留 ASHARE_WEB_USERNAME 会自动成为管理员
+export ASHARE_WEB_ADMIN_USERNAME='你的管理员用户名'
 python web_app.py
 ```
 
-打开 `http://127.0.0.1:8000`。朋友打开公网地址后可通过“使用邀请码注册”创建自己的账号；首次登录后 `/account`、`/paper` 中的数据不会与其他账号混用。模拟委托由持续运行的 `monitor.py` 在交易时段下一轮行情中处理；`--test` 模式不会成交。开发机之外不要直接暴露 8000；服务器步骤见 [部署指南](deploy/README_deploy.md)。
+打开 `http://127.0.0.1:8000`。管理员登录后可从“用户管理”进入后台，直接添加用户、启用/停用账号、重置普通用户密码或删除用户。朋友也可以通过“使用邀请码注册”创建自己的账号；首次登录后 `/account`、`/paper` 中的数据不会与其他账号混用。模拟委托由持续运行的 `monitor.py` 在交易时段下一轮行情中处理；`--test` 模式不会成交。开发机之外不要直接暴露 8000；服务器步骤见 [部署指南](deploy/README_deploy.md)。
 
 ### 6. 策略研究
 

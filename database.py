@@ -22,6 +22,8 @@ from sqlalchemy import (
     Boolean,
     create_engine,
     event,
+    inspect,
+    text,
 )
 from sqlalchemy.orm import Session, declarative_base, relationship, sessionmaker
 
@@ -141,6 +143,8 @@ class WebUser(Base):
     login_username = Column(String(64), nullable=False, unique=True, index=True)
     password_hash = Column(String(255), nullable=False)
     legacy_env = Column(Boolean, nullable=False, default=False)
+    is_admin = Column(Boolean, nullable=False, default=False, server_default="0")
+    is_active = Column(Boolean, nullable=False, default=True, server_default="1")
     created_at = Column(DateTime, default=datetime.now, nullable=False)
     updated_at = Column(
         DateTime, default=datetime.now, onupdate=datetime.now, nullable=False
@@ -342,6 +346,25 @@ class PaperOrder(Base):
 # ── 数据库初始化 ──────────────────────────────────────────────────
 
 
+def _ensure_web_user_columns():
+    """Add WebUser columns introduced after the first multi-user release."""
+    if not DATABASE_URL.startswith("sqlite"):
+        return
+    columns = {
+        column["name"] for column in inspect(engine).get_columns("web_users")
+    }
+    missing_columns = {
+        "is_admin": "ALTER TABLE web_users ADD COLUMN is_admin BOOLEAN NOT NULL DEFAULT 0",
+        "is_active": "ALTER TABLE web_users ADD COLUMN is_active BOOLEAN NOT NULL DEFAULT 1",
+    }
+    if not missing_columns.keys() - columns:
+        return
+    with engine.begin() as connection:
+        for name, statement in missing_columns.items():
+            if name not in columns:
+                connection.execute(text(statement))
+
+
 def init_db():
     """初始化数据库（创建所有表）"""
     global _DB_INITIALIZED
@@ -351,6 +374,7 @@ def init_db():
         if _DB_INITIALIZED:
             return
         Base.metadata.create_all(bind=engine)
+        _ensure_web_user_columns()
         # create_all 不会为既有表补建后加入的索引，因此显式检查创建。
         for table in (
             Portfolio.__table__,

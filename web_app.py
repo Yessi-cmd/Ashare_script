@@ -42,12 +42,17 @@ from settings import get_owner_user_id
 from web_auth import (
     WebAuthError,
     WebPrincipal,
+    admin_create_web_user,
     authenticate_web_user,
+    delete_web_user,
+    list_web_users,
     load_web_principal,
     make_signed_token,
     read_signed_token,
     register_web_user,
     registration_code_configured,
+    reset_web_user_password,
+    set_web_user_active,
 )
 
 logger = logging.getLogger(__name__)
@@ -86,6 +91,25 @@ ACCOUNT_RESULT_MESSAGES = {
     "invalid-data": ("error", "股票代码、价格、股数或风险参数无效。"),
     "legacy-yaml": ("error", "当前遗留 YAML 账号不支持网页编辑，请先切换到数据库用户。"),
     "request-failed": ("error", "个人数据操作失败，请稍后重试。"),
+}
+
+ADMIN_RESULT_MESSAGES = {
+    "user-created": ("ok", "用户已创建，可以把用户名和初始密码发给对方。"),
+    "user-activated": ("ok", "用户已启用。"),
+    "user-suspended": ("ok", "用户已停用，已有会话也会立即失效。"),
+    "password-reset": ("ok", "用户密码已重置，旧密码立即失效。"),
+    "user-deleted": ("ok", "用户及其个人数据已删除。"),
+    "invalid-password-confirm": ("error", "两次输入的密码不一致。"),
+    "cannot-change-self": ("error", "不能停用当前管理员账号。"),
+    "cannot-delete-self": ("error", "不能删除当前管理员账号。"),
+    "last-admin": ("error", "至少需要保留一个启用中的管理员。"),
+    "cannot-manage-admin": ("error", "不能从这里修改其他管理员账号。"),
+    "legacy-password": ("error", "遗留环境账号密码由服务端环境变量管理。"),
+    "user-not-found": ("error", "用户不存在，可能已经被删除。"),
+    "username-taken": ("error", "用户名已存在，请换一个。"),
+    "invalid-username": ("error", "用户名需为 3-32 位字母、数字、点、短横线或下划线。"),
+    "weak-password": ("error", "密码至少需要 8 位，且不能超过 256 位。"),
+    "request-failed": ("error", "用户管理操作失败，请稍后重试。"),
 }
 
 
@@ -209,6 +233,17 @@ def require_auth(
         status_code=status.HTTP_303_SEE_OTHER,
         headers={"Location": f"/login?next={quote(next_path, safe='')}"},
     )
+
+
+def require_admin(
+    request: Request,
+    credentials: HTTPBasicCredentials = Depends(security),
+) -> WebPrincipal:
+    """Require a live, database-backed administrator account."""
+    principal = require_auth(request, credentials)
+    if not principal.is_admin:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="无权访问")
+    return principal
 
 
 def _personal_user_id(config: dict, principal: WebPrincipal) -> int | None:
@@ -403,6 +438,124 @@ def logout():
     response = RedirectResponse("/login", status_code=303)
     response.delete_cookie(SESSION_COOKIE_NAME, path="/")
     return response
+
+
+def _admin_context(
+    principal: WebPrincipal,
+    result: Optional[str] = None,
+) -> dict:
+    users = list_web_users()
+    session_secret = _auth_settings()
+    notice_data = ADMIN_RESULT_MESSAGES.get(result)
+    return {
+        "data": {
+            "users": users,
+            "active_count": sum(1 for user in users if user["is_active"]),
+            "admin_count": sum(1 for user in users if user["is_admin"]),
+            "csrf_token": _make_csrf_token(
+                principal.username,
+                session_secret,
+                int(time.time()) + CSRF_TTL_SECONDS,
+                principal.user_id,
+            ),
+        },
+        "notice": (
+            {"tone": notice_data[0], "text": notice_data[1]}
+            if notice_data
+            else None
+        ),
+    }
+
+
+@app.get("/admin", response_class=HTMLResponse)
+def admin_page(
+    request: Request,
+    result: Optional[str] = Query(default=None),
+    current_user: WebPrincipal = Depends(require_admin),
+):
+    context = _admin_context(current_user, result)
+    return templates.TemplateResponse(
+        request=request,
+        name="admin.html",
+        context={**context, "title": "用户管理"},
+    )
+
+
+@app.post("/admin/users")
+async def admin_user_create(
+    request: Request,
+    current_user: WebPrincipal = Depends(require_admin),
+):
+    form = parse_qs((await request.body()).decode("utf-8", errors="replace"))
+    _require_csrf(form.get("csrf_token", [""])[0], current_user)
+    username = form.get("username", [""])[0]
+    password = form.get("password", [""])[0]
+    password_confirm = form.get("password_confirm", [""])[0]
+    if password != password_confirm:
+        result = "invalid-password-confirm"
+    else:
+        try:
+            admin_create_web_user(username, password)
+        except WebAuthError as exc:
+            result = exc.code if exc.code in ADMIN_RESULT_MESSAGES else "request-failed"
+        else:
+            result = "user-created"
+    return RedirectResponse(f"/admin?result={result}", status_code=303)
+
+
+@app.post("/admin/users/{user_id}/status")
+async def admin_user_status(
+    request: Request,
+    user_id: int,
+    current_user: WebPrincipal = Depends(require_admin),
+):
+    form = parse_qs((await request.body()).decode("utf-8", errors="replace"))
+    _require_csrf(form.get("csrf_token", [""])[0], current_user)
+    active = form.get("active", [""])[0] == "1"
+    try:
+        set_web_user_active(current_user.user_id, user_id, active)
+        result = "user-activated" if active else "user-suspended"
+    except WebAuthError as exc:
+        result = exc.code if exc.code in ADMIN_RESULT_MESSAGES else "request-failed"
+    return RedirectResponse(f"/admin?result={result}", status_code=303)
+
+
+@app.post("/admin/users/{user_id}/password")
+async def admin_user_password(
+    request: Request,
+    user_id: int,
+    current_user: WebPrincipal = Depends(require_admin),
+):
+    form = parse_qs((await request.body()).decode("utf-8", errors="replace"))
+    _require_csrf(form.get("csrf_token", [""])[0], current_user)
+    password = form.get("password", [""])[0]
+    password_confirm = form.get("password_confirm", [""])[0]
+    if password != password_confirm:
+        result = "invalid-password-confirm"
+    else:
+        try:
+            reset_web_user_password(user_id, password)
+        except WebAuthError as exc:
+            result = exc.code if exc.code in ADMIN_RESULT_MESSAGES else "request-failed"
+        else:
+            result = "password-reset"
+    return RedirectResponse(f"/admin?result={result}", status_code=303)
+
+
+@app.post("/admin/users/{user_id}/delete")
+async def admin_user_delete(
+    request: Request,
+    user_id: int,
+    current_user: WebPrincipal = Depends(require_admin),
+):
+    form = parse_qs((await request.body()).decode("utf-8", errors="replace"))
+    _require_csrf(form.get("csrf_token", [""])[0], current_user)
+    try:
+        delete_web_user(current_user.user_id, user_id)
+        result = "user-deleted"
+    except WebAuthError as exc:
+        result = exc.code if exc.code in ADMIN_RESULT_MESSAGES else "request-failed"
+    return RedirectResponse(f"/admin?result={result}", status_code=303)
 
 
 def _account_context(

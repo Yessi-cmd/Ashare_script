@@ -35,6 +35,7 @@
 | 14 | [横截面选股与可实现组合回测](14-cross-sectional-selection.md) | COMPLETE | 横截面排名、有限持仓组合回测、样本外验证 |
 | 15 | [实时模拟盘与实盘对照](15-paper-trading.md) | COMPLETE | 1 万元模拟账户、实时撮合、持仓与订单账本 |
 | 16 | [多用户 Web 账号与数据隔离](16-multi-user-web.md) | COMPLETE | 独立账号、邀请码注册、个人数据与模拟盘隔离 |
+| 17 | [Web 管理员与用户管理](17-web-admin.md) | COMPLETE | 管理员后台、用户创建、状态管理与密码重置 |
 
 ## 通用完成标准
 

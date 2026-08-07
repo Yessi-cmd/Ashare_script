@@ -276,6 +276,72 @@ class WebAppTests(unittest.TestCase):
         self.assertEqual(response.headers["location"], "/login?registered=1")
         register.assert_called_once_with("bob", "bob-password", "invite-only")
 
+    def test_admin_page_is_hidden_from_regular_users(self):
+        regular = WebPrincipal(user_id=41, username="alice")
+        with patch.dict("os.environ", AUTH_ENV, clear=True), patch(
+            "web_app.authenticate_web_user", return_value=regular
+        ):
+            response = self.client.get("/admin", auth=("alice", "password"))
+        self.assertEqual(response.status_code, 403)
+
+    def test_admin_page_renders_users_and_admin_create_uses_csrf(self):
+        admin = WebPrincipal(user_id=41, username="owner", is_admin=True)
+        users = [{
+            "user_id": 41,
+            "username": "owner",
+            "legacy_env": True,
+            "is_admin": True,
+            "is_active": True,
+            "created_at": None,
+            "portfolio_count": 1,
+            "watchlist_count": 2,
+            "paper_order_count": 3,
+        }]
+        with patch.dict("os.environ", AUTH_ENV, clear=True), patch(
+            "web_app.authenticate_web_user", return_value=admin
+        ), patch("web_app.list_web_users", return_value=users):
+            page = self.client.get("/admin", auth=("owner", "password"))
+        self.assertEqual(page.status_code, 200)
+        self.assertIn("用户管理", page.text)
+        self.assertIn("添加用户", page.text)
+        self.assertIn("owner", page.text)
+
+        csrf_token = _make_csrf_token(
+            "owner", AUTH_ENV["ASHARE_WEB_SESSION_SECRET"], int(time.time()) + 60, 41
+        )
+        with patch.dict("os.environ", AUTH_ENV, clear=True), patch(
+            "web_app.authenticate_web_user", return_value=admin
+        ), patch("web_app.admin_create_web_user") as create:
+            response = self.client.post(
+                "/admin/users",
+                auth=("owner", "password"),
+                data={
+                    "csrf_token": csrf_token,
+                    "username": "bob",
+                    "password": "bob-password",
+                    "password_confirm": "bob-password",
+                },
+            )
+        self.assertEqual(response.status_code, 303)
+        self.assertEqual(response.headers["location"], "/admin?result=user-created")
+        create.assert_called_once_with("bob", "bob-password")
+
+        with patch.dict("os.environ", AUTH_ENV, clear=True), patch(
+            "web_app.authenticate_web_user", return_value=admin
+        ), patch("web_app.admin_create_web_user") as create:
+            rejected = self.client.post(
+                "/admin/users",
+                auth=("owner", "password"),
+                data={
+                    "csrf_token": "tampered",
+                    "username": "mallory",
+                    "password": "mallory-password",
+                    "password_confirm": "mallory-password",
+                },
+            )
+        self.assertEqual(rejected.status_code, 403)
+        create.assert_not_called()
+
     def test_overview_uses_compact_index_tape_without_hero_slogan(self):
         with patch.dict("os.environ", AUTH_ENV, clear=True), patch(
             "web_app._config", return_value={}

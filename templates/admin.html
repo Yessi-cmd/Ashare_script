@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="page-header admin-header">
+  <div><p class="eyebrow">ADMIN CONSOLE</p><h1>用户管理</h1><p>从这里创建和维护朋友的研究台账号；每个账号的数据仍然独立保存。</p></div>
+  <span class="pill accent">管理员：{{ request.state.web_user.username }}</span>
+</section>
+
+{% if notice %}<div class="paper-notice {{ notice.tone }}" role="status">{{ notice.text }}</div>{% endif %}
+
+<section class="admin-summary" aria-label="用户统计">
+  <article class="admin-stat"><span>全部账号</span><strong>{{ data.users|length }}</strong><small>已建立的 Web 登录身份</small></article>
+  <article class="admin-stat"><span>启用中</span><strong>{{ data.active_count }}</strong><small>可以正常登录研究台</small></article>
+  <article class="admin-stat"><span>管理员</span><strong>{{ data.admin_count }}</strong><small>仅服务端配置可增加</small></article>
+</section>
+
+<section class="admin-create-grid">
+  <div class="panel">
+    <div class="section-title"><div><h2>添加用户</h2><p>直接创建普通用户，不需要邀请码。</p></div><span class="pill">普通账号</span></div>
+    <form method="post" action="/admin/users" class="admin-create-form">
+      <input type="hidden" name="csrf_token" value="{{ data.csrf_token }}">
+      <label>用户名<input name="username" autocomplete="off" placeholder="例如 alex" required></label>
+      <label>初始密码<input name="password" type="password" autocomplete="new-password" placeholder="至少 8 位" required></label>
+      <label>确认密码<input name="password_confirm" type="password" autocomplete="new-password" placeholder="再次输入密码" required></label>
+      <button class="primary-button" type="submit">创建账号</button>
+    </form>
+  </div>
+  <aside class="admin-note">
+    <span class="admin-note-icon" aria-hidden="true">⌁</span>
+    <div><strong>管理边界</strong><p>管理员不能停用或删除自己。遗留环境账号的密码仍由 <code>ASHARE_WEB_PASSWORD</code> 管理。</p></div>
+  </aside>
+</section>
+
+<section class="panel admin-users-panel">
+  <div class="section-title"><div><h2>账号列表</h2><p>停用账号后，既有 Cookie 和 Basic Auth 会同时失效。</p></div><span>{{ data.users|length }} 个账号</span></div>
+  <div class="table-wrap">
+    <table class="admin-users-table">
+      <thead><tr><th>账号</th><th>个人数据</th><th>状态</th><th>创建时间</th><th>管理操作</th></tr></thead>
+      <tbody>
+      {% for user in data.users %}
+        <tr>
+          <td data-label="账号"><div class="admin-user-identity"><strong>{{ user.username }}</strong><div>{% if user.is_admin %}<span class="admin-role">管理员</span>{% else %}<span class="muted-value">普通用户</span>{% endif %}{% if user.legacy_env %}<span class="admin-legacy">环境账号</span>{% endif %}</div></div></td>
+          <td data-label="个人数据"><span>{{ user.portfolio_count }} 持仓</span><small>{{ user.watchlist_count }} 关注 · {{ user.paper_order_count }} 笔模拟委托</small></td>
+          <td data-label="状态"><span class="admin-status {{ 'is-active' if user.is_active else 'is-inactive' }}">{{ '启用中' if user.is_active else '已停用' }}</span></td>
+          <td data-label="创建时间"><span class="muted-value">{{ user.created_at.strftime('%Y-%m-%d') if user.created_at else '—' }}</span></td>
+          <td data-label="管理操作">
+            {% if user.user_id == request.state.web_user.user_id %}
+              <span class="admin-current">当前账号</span>
+            {% elif user.is_admin %}
+              <span class="admin-current">受保护管理员</span>
+            {% else %}
+              <div class="admin-actions">
+                <form method="post" action="/admin/users/{{ user.user_id }}/status" data-confirm="再次点击确认">
+                  <input type="hidden" name="csrf_token" value="{{ data.csrf_token }}"><input type="hidden" name="active" value="{{ '0' if user.is_active else '1' }}">
+                  <button class="secondary-button compact-button" type="submit">{{ '停用' if user.is_active else '启用' }}</button>
+                </form>
+                {% if not user.legacy_env %}
+                <details class="admin-password-details"><summary>重置密码</summary><form method="post" action="/admin/users/{{ user.user_id }}/password" class="admin-password-form"><input type="hidden" name="csrf_token" value="{{ data.csrf_token }}"><label class="sr-only">新密码<input name="password" type="password" autocomplete="new-password" placeholder="新密码" required></label><label class="sr-only">确认新密码<input name="password_confirm" type="password" autocomplete="new-password" placeholder="确认新密码" required></label><button class="secondary-button compact-button" type="submit">保存</button></form></details>
+                {% endif %}
+                <form method="post" action="/admin/users/{{ user.user_id }}/delete" data-confirm="再次点击确认删除"><input type="hidden" name="csrf_token" value="{{ data.csrf_token }}"><button class="text-button danger-text" type="submit">删除</button></form>
+              </div>
+            {% endif %}
+          </td>
+        </tr>
+      {% else %}
+        <tr><td colspan="5" class="empty">还没有 Web 用户，请先添加一个账号。</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}
