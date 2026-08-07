@@ -5,13 +5,18 @@ from unittest.mock import patch
 
 import pandas as pd
 from fastapi.testclient import TestClient
+from sqlalchemy import create_engine
+from sqlalchemy.pool import StaticPool
+from sqlalchemy.orm import sessionmaker
 
+from database import Base, Portfolio, User
 from web_app import (
     SESSION_COOKIE_NAME,
     _make_csrf_token,
     _make_session_token,
     app,
 )
+from web_auth import WebPrincipal
 
 
 EMPTY_RECOMMENDATIONS = {
@@ -228,6 +233,49 @@ class WebAppTests(unittest.TestCase):
         self.assertEqual(page.status_code, 200)
         self.assertIn("今日重点候选", page.text)
 
+    def test_authenticated_pages_pass_current_user_to_personal_loaders(self):
+        principal = WebPrincipal(user_id=41, username="alice")
+        with patch.dict(
+            "os.environ",
+            {"ASHARE_WEB_SESSION_SECRET": "0123456789abcdef0123456789abcdef"},
+            clear=True,
+        ), patch("web_app.authenticate_web_user", return_value=principal), patch(
+            "web_app._config", return_value={}
+        ), patch(
+            "web_app.load_overview", return_value=EMPTY_OVERVIEW.copy()
+        ) as overview, patch(
+            "web_app.load_recommendations", return_value=EMPTY_RECOMMENDATIONS.copy()
+        ) as recommendations:
+            response = self.client.get("/", auth=("alice", "password"))
+
+        self.assertEqual(response.status_code, 200)
+        overview.assert_called_once_with({}, user_id=41)
+        recommendations.assert_called_once_with({}, user_id=41, limit=4)
+        self.assertIn("alice", response.text)
+
+    def test_registration_route_redirects_after_account_creation(self):
+        principal = WebPrincipal(user_id=42, username="bob")
+        with patch.dict(
+            "os.environ",
+            {
+                "ASHARE_WEB_SESSION_SECRET": "0123456789abcdef0123456789abcdef",
+                "ASHARE_WEB_REGISTRATION_CODE": "invite-only",
+            },
+            clear=True,
+        ), patch("web_app.register_web_user", return_value=principal) as register:
+            response = self.client.post(
+                "/register",
+                data={
+                    "username": "bob",
+                    "password": "bob-password",
+                    "password_confirm": "bob-password",
+                    "registration_code": "invite-only",
+                },
+            )
+        self.assertEqual(response.status_code, 303)
+        self.assertEqual(response.headers["location"], "/login?registered=1")
+        register.assert_called_once_with("bob", "bob-password", "invite-only")
+
     def test_overview_uses_compact_index_tape_without_hero_slogan(self):
         with patch.dict("os.environ", AUTH_ENV, clear=True), patch(
             "web_app._config", return_value={}
@@ -394,6 +442,68 @@ class WebAppTests(unittest.TestCase):
             )
         self.assertEqual(response.status_code, 303)
         self.assertEqual(response.headers["location"], "/")
+
+
+class AccountWebAppTests(unittest.TestCase):
+    def setUp(self):
+        self.client = TestClient(app, follow_redirects=False)
+        self.engine = create_engine(
+            "sqlite://",
+            connect_args={"check_same_thread": False},
+            poolclass=StaticPool,
+        )
+        Base.metadata.create_all(self.engine)
+        self.sessions = sessionmaker(bind=self.engine)
+        with self.sessions() as db:
+            db.add_all([
+                User(user_id=41, username="alice"),
+                User(user_id=42, username="bob"),
+            ])
+            db.commit()
+
+    def tearDown(self):
+        self.engine.dispose()
+
+    def test_account_write_is_scoped_to_authenticated_user(self):
+        alice = WebPrincipal(user_id=41, username="alice")
+        secret = "0123456789abcdef0123456789abcdef"
+        csrf = _make_csrf_token("alice", secret, int(time.time()) + 60, 41)
+        with patch.dict(
+            "os.environ", {"ASHARE_WEB_SESSION_SECRET": secret}, clear=True
+        ), patch("web_app.authenticate_web_user", return_value=alice), patch(
+            "web_app._config", return_value={}
+        ), patch("web_app.init_db"), patch(
+            "web_app.get_db", side_effect=self.sessions
+        ):
+            saved = self.client.post(
+                "/account/portfolio",
+                auth=("alice", "password"),
+                data={
+                    "csrf_token": csrf,
+                    "stock_code": "600519",
+                    "name": "贵州茅台",
+                    "buy_price": "1500",
+                    "shares": "100",
+                    "stop_loss": "-5",
+                    "take_profit": "10",
+                },
+            )
+            self.assertEqual(saved.status_code, 303)
+
+            bob = WebPrincipal(user_id=42, username="bob")
+            with patch("web_app.authenticate_web_user", return_value=bob):
+                bob_page = self.client.get("/account", auth=("bob", "password"))
+
+        self.assertEqual(bob_page.status_code, 200)
+        self.assertNotIn("贵州茅台", bob_page.text)
+        with self.sessions() as db:
+            self.assertEqual(db.query(Portfolio).filter(
+                Portfolio.user_id == 41,
+                Portfolio.stock_code == "600519",
+            ).count(), 1)
+            self.assertEqual(db.query(Portfolio).filter(
+                Portfolio.user_id == 42,
+            ).count(), 0)
 
 
 if __name__ == "__main__":

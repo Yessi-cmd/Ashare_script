@@ -168,6 +168,21 @@ def get_all_watchlists() -> Dict[int, dict]:
         db.close()
 
 
+def get_all_monitoring_universe() -> Dict[str, str]:
+    """Return the deduplicated stock universe used by all database users."""
+    db = get_db()
+    try:
+        universe = {
+            row.stock_code: row.name
+            for row in db.query(Portfolio).all()
+        }
+        for row in db.query(Watchlist).all():
+            universe.setdefault(row.stock_code, row.name)
+        return universe
+    finally:
+        db.close()
+
+
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     print(f"当前数据库用户数: {len(get_all_users())}")

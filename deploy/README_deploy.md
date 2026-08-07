@@ -35,6 +35,8 @@ sudoedit /etc/ashare-monitor/ashare.env
 
 为 `ASHARE_WEB_PASSWORD` 使用密码管理器生成的长随机密码，不要与 Telegram 或邮箱密码复用。`ASHARE_WEB_SESSION_SECRET` 必须是另一段至少 32 字节的随机值，用于签署浏览器会话，不能与密码相同。
 
+如果要邀请朋友使用网页，设置 `ASHARE_WEB_REGISTRATION_CODE` 为一段长随机邀请码，并只通过私下渠道分享；留空会关闭网页注册。朋友注册后会获得独立的网页账号、持仓/关注池和模拟盘，公共行情快照仍由所有用户共享采集结果。
+
 ## 3. 上线前验证
 
 ```bash

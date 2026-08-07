@@ -19,6 +19,7 @@ from sqlalchemy import (
     Index,
     Integer,
     String,
+    Boolean,
     create_engine,
     event,
 )
@@ -72,6 +73,10 @@ class User(Base):
     # 关联关系
     portfolios = relationship("Portfolio", back_populates="user", cascade="all, delete-orphan")
     watchlist = relationship("Watchlist", back_populates="user", cascade="all, delete-orphan")
+    web_account = relationship(
+        "WebUser", back_populates="user", uselist=False,
+        cascade="all, delete-orphan"
+    )
     
     def __repr__(self):
         return f"<User(user_id={self.user_id}, username={self.username})>"
@@ -121,6 +126,30 @@ class Watchlist(Base):
     
     def __repr__(self):
         return f"<Watchlist(user={self.user_id}, stock={self.stock_code}, name={self.name})>"
+
+
+class WebUser(Base):
+    """Web login identity bound to one existing application user."""
+
+    __tablename__ = "web_users"
+
+    user_id = Column(
+        Integer,
+        ForeignKey("users.user_id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    login_username = Column(String(64), nullable=False, unique=True, index=True)
+    password_hash = Column(String(255), nullable=False)
+    legacy_env = Column(Boolean, nullable=False, default=False)
+    created_at = Column(DateTime, default=datetime.now, nullable=False)
+    updated_at = Column(
+        DateTime, default=datetime.now, onupdate=datetime.now, nullable=False
+    )
+
+    user = relationship("User", back_populates="web_account")
+
+    def __repr__(self):
+        return f"<WebUser(user_id={self.user_id}, username={self.login_username})>"
 
 
 class AlertState(Base):
@@ -203,7 +232,7 @@ class MarketQuoteSnapshot(Base):
 
 
 class PaperAccount(Base):
-    """Single-owner paper-trading cash ledger, stored in integer fen."""
+    """Per-user paper-trading cash ledger, stored in integer fen."""
     __tablename__ = "paper_accounts"
 
     owner_user_id = Column(Integer, primary_key=True)
@@ -326,6 +355,7 @@ def init_db():
         for table in (
             Portfolio.__table__,
             Watchlist.__table__,
+            WebUser.__table__,
             AlertState.__table__,
             DailyBar.__table__,
             QuoteSnapshot.__table__,

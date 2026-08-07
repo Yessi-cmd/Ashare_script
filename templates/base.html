@@ -29,6 +29,7 @@
       <nav class="primary-nav" aria-label="主导航">
         {% set current_path = request.url.path %}
         <a class="nav-link {{ 'is-active' if current_path == '/' or current_path.startswith('/stocks/') else '' }}" href="/" {% if current_path == '/' or current_path.startswith('/stocks/') %}aria-current="page"{% endif %}><span class="nav-glyph" aria-hidden="true">⌂</span><span>今日</span></a>
+        <a class="nav-link {{ 'is-active' if current_path == '/account' else '' }}" href="/account" {% if current_path == '/account' %}aria-current="page"{% endif %}><span class="nav-glyph" aria-hidden="true">◎</span><span>我的数据</span></a>
         <a class="nav-link {{ 'is-active' if current_path == '/paper' else '' }}" href="/paper" {% if current_path == '/paper' %}aria-current="page"{% endif %}><span class="nav-glyph" aria-hidden="true">▣</span><span>模拟盘</span></a>
         <a class="nav-link {{ 'is-active' if current_path == '/markets' else '' }}" href="/markets" {% if current_path == '/markets' %}aria-current="page"{% endif %}><span class="nav-glyph" aria-hidden="true">◌</span><span>全球市场</span></a>
         <a class="nav-link {{ 'is-active' if current_path == '/recommendations' else '' }}" href="/recommendations" {% if current_path == '/recommendations' %}aria-current="page"{% endif %}><span class="nav-glyph" aria-hidden="true">✦</span><span>荐股研究</span></a>
@@ -37,6 +38,7 @@
         <a class="nav-link {{ 'is-active' if current_path == '/system' else '' }}" href="/system" {% if current_path == '/system' %}aria-current="page"{% endif %}><span class="nav-glyph" aria-hidden="true">◈</span><span>系统</span></a>
       </nav>
       <div class="topbar-actions">
+        <span class="topbar-user" title="当前登录用户">{{ request.state.web_user.username }}</span>
         <button class="icon-button theme-toggle" type="button" data-theme-toggle aria-label="切换主题" aria-pressed="false"><span class="theme-symbol" aria-hidden="true">☾</span><span class="sr-only">切换主题</span></button>
         <form action="/logout" method="post"><button class="nav-button" type="submit">退出</button></form>
       </div>

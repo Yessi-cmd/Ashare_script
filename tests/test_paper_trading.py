@@ -20,6 +20,8 @@ from paper_trading import (
     calculate_trade_fee_fen,
     cancel_paper_order,
     ensure_paper_account,
+    load_all_paper_monitoring_universe,
+    load_pending_paper_owner_ids,
     load_paper_dashboard,
     load_paper_monitoring_universe,
     process_pending_paper_orders,
@@ -127,6 +129,42 @@ class PaperTradingTests(unittest.TestCase):
 
         cancel_paper_order(7, order.id)
         self.assertEqual(load_paper_monitoring_universe(7), {})
+
+    def test_multiple_paper_users_keep_orders_and_quotes_isolated(self):
+        submit_paper_order(
+            7, "BUY", "600519", 100, "order_key_multi_7", submitted_at=THURSDAY_OPEN
+        )
+        submit_paper_order(
+            8, "BUY", "300750", 100, "order_key_multi_8", submitted_at=THURSDAY_OPEN
+        )
+        self.assertEqual(
+            load_all_paper_monitoring_universe(),
+            {"600519": "600519", "300750": "300750"},
+        )
+        self.assertEqual(load_pending_paper_owner_ids(), [7, 8])
+
+        process_pending_paper_orders(
+            quote("600519", price=10.0), 7, OPEN_CONFIG, executed_at=THURSDAY_OPEN
+        )
+        with self.sessions() as db:
+            self.assertEqual(db.query(PaperPosition).filter(
+                PaperPosition.owner_user_id == 7
+            ).count(), 1)
+            self.assertEqual(db.query(PaperPosition).filter(
+                PaperPosition.owner_user_id == 8
+            ).count(), 0)
+            self.assertEqual(db.query(PaperOrder).filter(
+                PaperOrder.owner_user_id == 8,
+                PaperOrder.status == "pending",
+            ).count(), 1)
+
+        process_pending_paper_orders(
+            quote("300750", price=20.0), 8, OPEN_CONFIG, executed_at=THURSDAY_OPEN
+        )
+        with self.sessions() as db:
+            self.assertEqual(db.query(PaperPosition).filter(
+                PaperPosition.owner_user_id == 8
+            ).count(), 1)
 
     def test_buy_uses_integer_fen_and_includes_minimum_commission(self):
         submit_paper_order(

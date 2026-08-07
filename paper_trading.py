@@ -54,8 +54,10 @@ class PaperTradingError(ValueError):
         self.code = code
 
 
-def paper_owner_user_id(config: dict) -> int:
-    """Resolve the configured owner or the local single-user fallback key."""
+def paper_owner_user_id(config: dict, user_id: int | None = None) -> int:
+    """Resolve an explicit web user or the legacy configured owner key."""
+    if user_id is not None:
+        return int(user_id)
     return get_owner_user_id(config) or 0
 
 
@@ -109,7 +111,7 @@ def _ensure_account(db, owner_user_id: int) -> PaperAccount:
 
 
 def ensure_paper_account(owner_user_id: int) -> PaperAccount:
-    """Provision the owner's fixed 10,000-yuan paper account idempotently."""
+    """Provision one user's fixed 10,000-yuan paper account idempotently."""
     init_db()
     db = get_db()
     try:
@@ -318,6 +320,37 @@ def load_paper_monitoring_universe(owner_user_id: int) -> dict[str, str]:
         db.close()
 
 
+def load_all_paper_monitoring_universe() -> dict[str, str]:
+    """Return the deduplicated paper symbols needed by every paper account."""
+    init_db()
+    db = get_db()
+    try:
+        names = {
+            row.stock_code: row.name
+            for row in db.query(PaperPosition).all()
+        }
+        for order in db.query(PaperOrder).filter(
+            PaperOrder.status == "pending"
+        ).all():
+            names.setdefault(order.stock_code, order.name or order.stock_code)
+        return names
+    finally:
+        db.close()
+
+
+def load_pending_paper_owner_ids() -> list[int]:
+    """Return owners with pending orders for the multi-user monitor."""
+    init_db()
+    db = get_db()
+    try:
+        rows = db.query(PaperOrder.owner_user_id).filter(
+            PaperOrder.status == "pending"
+        ).distinct().all()
+        return [int(owner_user_id) for (owner_user_id,) in rows]
+    finally:
+        db.close()
+
+
 def _price_to_fen(value) -> int | None:
     try:
         price = Decimal(str(value))
@@ -492,9 +525,16 @@ def _yuan(fen: int | None) -> float | None:
     return None if fen is None else fen / 100.0
 
 
-def _live_portfolio_rows(db, config: dict, owner_user_id: int) -> list[dict]:
+def _live_portfolio_rows(
+    db,
+    config: dict,
+    owner_user_id: int,
+    *,
+    explicit_user_id: int | None = None,
+) -> list[dict]:
     configured_owner = get_owner_user_id(config)
-    if configured_owner is not None:
+    data_user_id = explicit_user_id if explicit_user_id is not None else configured_owner
+    if data_user_id is not None:
         return [
             {
                 "code": row.stock_code,
@@ -503,7 +543,7 @@ def _live_portfolio_rows(db, config: dict, owner_user_id: int) -> list[dict]:
                 "shares": int(row.shares),
             }
             for row in db.query(Portfolio).filter(
-                Portfolio.user_id == owner_user_id
+                Portfolio.user_id == data_user_id
             ).all()
         ]
     return [
@@ -517,9 +557,14 @@ def _live_portfolio_rows(db, config: dict, owner_user_id: int) -> list[dict]:
     ]
 
 
-def load_paper_dashboard(config: dict, *, at: datetime | None = None) -> dict:
-    """Load the complete local paper account and manual live-portfolio comparison."""
-    owner_user_id = paper_owner_user_id(config)
+def load_paper_dashboard(
+    config: dict,
+    *,
+    user_id: int | None = None,
+    at: datetime | None = None,
+) -> dict:
+    """Load one user's paper account and manual live-portfolio comparison."""
+    owner_user_id = paper_owner_user_id(config, user_id)
     now = _normalize_local_time(at)
     interval = float(config.get("monitor", {}).get("interval_seconds", 30))
     stale_after = max(120.0, interval * 3)
@@ -541,7 +586,12 @@ def load_paper_dashboard(config: dict, *, at: datetime | None = None) -> dict:
             ).scalar()
             or 0
         )
-        live_rows = _live_portfolio_rows(db, config, owner_user_id)
+        live_rows = _live_portfolio_rows(
+            db,
+            config,
+            owner_user_id,
+            explicit_user_id=user_id,
+        )
         codes = {row.stock_code for row in positions}
         codes.update(row["code"] for row in live_rows)
         snapshots = {

@@ -38,12 +38,12 @@ from strategies import fetch_realtime_quotes, run_all_checks, prefilter_full_mar
 from snapshot_store import save_quote_snapshots
 from notifier import format_alerts, send_notification
 from paper_trading import (
-    load_paper_monitoring_universe,
-    paper_owner_user_id,
+    load_all_paper_monitoring_universe,
+    load_pending_paper_owner_ids,
     process_pending_paper_orders,
 )
 from settings import ConfigError, get_owner_user_id, load_config
-from user_config import load_user_config
+from user_config import get_all_monitoring_universe, load_user_config
 
 # ── 全局 ──────────────────────────────────────────────────────
 
@@ -274,15 +274,25 @@ def monitor_loop(config: dict, test_mode: bool = False, once: bool = False):
             runtime_config, data_source = build_runtime_config(config)
             portfolio = runtime_config.get("portfolio", {})
             watchlist = runtime_config.get("watchlist", {})
-            paper_owner = paper_owner_user_id(config)
             try:
-                paper_universe = load_paper_monitoring_universe(paper_owner)
+                paper_universe = load_all_paper_monitoring_universe()
             except Exception as exc:
                 logger.warning(f"读取模拟盘股票池失败，本轮跳过模拟盘: {exc}")
                 paper_universe = {}
             paper_codes = set(paper_universe)
             runtime_config["_paper_codes"] = paper_codes
-            all_codes = sorted(set(portfolio) | set(watchlist) | paper_codes)
+            try:
+                shared_user_universe = get_all_monitoring_universe()
+            except Exception as exc:
+                logger.warning(f"读取网页用户股票池失败，本轮仅使用当前监控池: {exc}")
+                shared_user_universe = {}
+            all_codes = sorted(
+                set(portfolio)
+                | set(watchlist)
+                | set(shared_user_universe)
+                | paper_codes
+            )
+            runtime_config["_snapshot_codes"] = set(all_codes)
 
             current_codes = tuple(all_codes)
             if current_codes != previous_codes and not full_market_enabled:
@@ -310,14 +320,15 @@ def monitor_loop(config: dict, test_mode: bool = False, once: bool = False):
                         str(code).zfill(6) for code in quotes["代码"].tolist()
                     }
                 runtime_config["_full_market_candidate_codes"] = scan_candidate_codes
-                if paper_codes:
-                    paper_quotes = fetch_realtime_quotes(sorted(paper_codes))
-                    if paper_quotes is not None and not paper_quotes.empty:
+                extra_codes = sorted(set(all_codes) - set(scan_candidate_codes))
+                if extra_codes:
+                    extra_quotes = fetch_realtime_quotes(extra_codes)
+                    if extra_quotes is not None and not extra_quotes.empty:
                         if quotes is None or quotes.empty:
-                            quotes = paper_quotes
+                            quotes = extra_quotes
                         else:
                             quotes = pd.concat(
-                                [quotes, paper_quotes], ignore_index=True
+                                [quotes, extra_quotes], ignore_index=True
                             ).drop_duplicates(subset=["代码"], keep="last")
                 if quotes is None or quotes.empty:
                     logger.info("预筛选无结果，等待下一轮...")
@@ -346,13 +357,10 @@ def monitor_loop(config: dict, test_mode: bool = False, once: bool = False):
             except Exception as exc:
                 logger.warning(f"保存 Web 行情快照失败，不影响本轮告警: {exc}")
 
-            if paper_codes and not test_mode:
+            if not test_mode:
                 try:
-                    process_pending_paper_orders(
-                        quotes,
-                        paper_owner,
-                        config,
-                    )
+                    for paper_owner in load_pending_paper_owner_ids():
+                        process_pending_paper_orders(quotes, paper_owner, config)
                 except Exception as exc:
                     logger.warning(f"模拟盘撮合失败，本轮订单保持待成交: {exc}")
 

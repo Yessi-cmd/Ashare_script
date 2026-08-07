@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="icon" href="data:,">
+  <title>注册 · A股个人研究台</title>
+  <script>
+    (() => {
+      try {
+        const saved = localStorage.getItem('ashare-theme');
+        const preferred = window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+        document.documentElement.dataset.theme = saved || preferred;
+      } catch (_) { document.documentElement.dataset.theme = 'dark'; }
+    })();
+  </script>
+  <link rel="stylesheet" href="{{ url_for('static', path='/app.css') }}?v=16">
+</head>
+<body class="login-body">
+  <button class="icon-button login-theme-toggle theme-toggle" type="button" data-theme-toggle aria-label="切换主题" aria-pressed="false"><span class="theme-symbol" aria-hidden="true">☾</span><span class="sr-only">切换主题</span></button>
+  <main class="login-shell register-shell">
+    <section class="login-copy">
+      <a class="brand login-brand" href="/login" aria-label="返回登录"><span class="brand-mark" aria-hidden="true">研</span><span class="brand-copy"><strong>个人研究台</strong><small>ASHARE · LAB</small></span></a>
+      <p class="eyebrow">INVITED RESEARCH DESK</p>
+      <h1>给自己一块，<br><em>独立的研究空间。</em></h1>
+      <p class="login-lede">注册后，持仓、关注池和模拟盘都会与其他用户分开保存。</p>
+    </section>
+    <section class="login-card">
+      <div class="login-card-heading"><span class="status-orb" aria-hidden="true"></span><div><h2>创建账号</h2><p>使用朋友分享的邀请码加入。</p></div></div>
+      {% if not registration_available %}
+        <p class="form-error">当前未开放注册，请联系管理员获取账号。</p>
+      {% else %}
+        {% if error %}<p class="form-error">{{ error }}</p>{% endif %}
+        <form method="post" action="/register" class="login-form">
+          <label>用户名<input name="username" autocomplete="username" placeholder="例如 alex" value="{{ username or '' }}" required autofocus></label>
+          <label>密码<input type="password" name="password" autocomplete="new-password" placeholder="至少 8 位" required></label>
+          <label>确认密码<input type="password" name="password_confirm" autocomplete="new-password" placeholder="再次输入密码" required></label>
+          <label>邀请码<input name="registration_code" autocomplete="off" placeholder="输入朋友提供的邀请码" required></label>
+          <button class="primary-button primary-button-wide" type="submit"><span>创建账号</span><span aria-hidden="true">→</span></button>
+        </form>
+      {% endif %}
+      <p class="login-register-link"><a href="/login">返回登录</a></p>
+      <small class="login-footnote"><span class="lock-icon" aria-hidden="true">⌁</span> 每个账号拥有独立的个人数据和模拟账户。</small>
+    </section>
+  </main>
+  <script src="{{ url_for('static', path='/app.js') }}?v=14" defer></script>
+</body>
+</html>

@@ -6,12 +6,13 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 import dashboard_data
-from database import Base, DailyBar, MarketQuoteSnapshot
+from database import Base, DailyBar, MarketQuoteSnapshot, Portfolio, User
 from dashboard_data import (
     _candidate_explanation,
     _candidate_label,
     load_a_share_overview,
     load_market_overview,
+    load_overview,
     load_recommendations,
     load_screener,
 )
@@ -100,6 +101,34 @@ class MarketDashboardDataTests(unittest.TestCase):
         self.init_patch.stop()
         self.get_db_patch.stop()
         self.engine.dispose()
+
+    def test_overview_filters_personal_data_by_explicit_web_user(self):
+        with self.sessions() as db:
+            db.add_all([
+                User(user_id=101, username="alice"),
+                User(user_id=102, username="bob"),
+                Portfolio(
+                    user_id=101,
+                    stock_code="600519",
+                    name="贵州茅台",
+                    buy_price=1500,
+                    shares=100,
+                ),
+                Portfolio(
+                    user_id=102,
+                    stock_code="300750",
+                    name="宁德时代",
+                    buy_price=400,
+                    shares=100,
+                ),
+            ])
+            db.commit()
+
+        config = {"app": {"owner_user_id": 999}}
+        alice = load_overview(config, user_id=101)
+        bob = load_overview(config, user_id=102)
+        self.assertEqual([row["code"] for row in alice["portfolio"]], ["600519"])
+        self.assertEqual([row["code"] for row in bob["portfolio"]], ["300750"])
 
     def test_market_overview_groups_indices_and_marks_stale_rows(self):
         # 02:00 UTC = 10:00 香港时间，港股交易中；快照以 UTC 存储。

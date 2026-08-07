@@ -599,6 +599,7 @@ def run_all_checks(quotes_df: pd.DataFrame, config: dict) -> tuple[list[Alert], 
     portfolio = config.get("portfolio", {})
     watchlist = config.get("watchlist", {})
     paper_codes = set(config.get("_paper_codes", ()))
+    snapshot_codes = set(config.get("_snapshot_codes", ()))
     signal_config = config.get("signal", {})
     full_market = config.get("full_market", {})
     
@@ -661,6 +662,14 @@ def run_all_checks(quotes_df: pd.DataFrame, config: dict) -> tuple[list[Alert], 
 
             # 模拟盘复用同一套 V2 评分，但不会改变真实组合或产生额外通知。
             if code in paper_codes and code not in score_details:
+                price = float(row.get("最新价", 0))
+                change_pct = float(row.get("涨跌幅", 0))
+                score, reason = calculate_score(code, price, change_pct)
+                score_details[code] = (score, reason)
+
+            # Other web users share the quote snapshot but must not generate
+            # alerts for the configured owner's notification channels.
+            if code in snapshot_codes and code not in score_details:
                 price = float(row.get("最新价", 0))
                 change_pct = float(row.get("涨跌幅", 0))
                 score, reason = calculate_score(code, price, change_pct)

@@ -113,19 +113,20 @@ def _snapshot_payload(snapshot: QuoteSnapshot, stale_after_seconds: float) -> di
     }
 
 
-def load_overview(config: dict) -> dict:
+def load_overview(config: dict, *, user_id: int | None = None) -> dict:
     init_db()
     owner_user_id = get_owner_user_id(config)
     interval = float(config.get("monitor", {}).get("interval_seconds", 30))
     stale_after = max(120.0, interval * 3)
     db = get_db()
     try:
-        if owner_user_id is not None:
+        data_user_id = user_id if user_id is not None else owner_user_id
+        if data_user_id is not None:
             portfolio_records = db.query(Portfolio).filter(
-                Portfolio.user_id == owner_user_id
+                Portfolio.user_id == data_user_id
             ).order_by(Portfolio.stock_code).all()
             watch_records = db.query(Watchlist).filter(
-                Watchlist.user_id == owner_user_id
+                Watchlist.user_id == data_user_id
             ).order_by(Watchlist.stock_code).all()
             portfolio = [
                 {
@@ -523,16 +524,21 @@ def load_stock_summary(stock_code: str) -> dict:
         db.close()
 
 
-def _personal_codes(db, config: dict) -> tuple[set[str], set[str], dict[str, str]]:
+def _personal_codes(
+    db,
+    config: dict,
+    user_id: int | None = None,
+) -> tuple[set[str], set[str], dict[str, str]]:
     """Return portfolio/watchlist membership without making external requests."""
     owner_user_id = get_owner_user_id(config)
     names: dict[str, str] = {}
-    if owner_user_id is not None:
+    data_user_id = user_id if user_id is not None else owner_user_id
+    if data_user_id is not None:
         portfolios = db.query(Portfolio).filter(
-            Portfolio.user_id == owner_user_id
+            Portfolio.user_id == data_user_id
         ).all()
         watches = db.query(Watchlist).filter(
-            Watchlist.user_id == owner_user_id
+            Watchlist.user_id == data_user_id
         ).all()
         portfolio_codes = {row.stock_code for row in portfolios}
         watchlist_codes = {row.stock_code for row in watches}
@@ -682,7 +688,7 @@ def _cached_universe_scores(latest_date) -> dict:
     return computed
 
 
-def _research_candidates(config: dict) -> dict:
+def _research_candidates(config: dict, user_id: int | None = None) -> dict:
     """Compute candidates from one aligned local qfq trading date.
 
     The expensive per-stock scoring is cached per trading date; personal
@@ -703,7 +709,9 @@ def _research_candidates(config: dict) -> dict:
                 "universe_size": len(RESEARCH_UNIVERSE),
                 "eligible_size": 0,
             }
-        portfolio_codes, watchlist_codes, personal_names = _personal_codes(db, config)
+        portfolio_codes, watchlist_codes, personal_names = _personal_codes(
+            db, config, user_id
+        )
         snapshot_names = {
             row.stock_code: row.name
             for row in db.query(QuoteSnapshot).filter(
@@ -742,9 +750,14 @@ def _research_candidates(config: dict) -> dict:
     }
 
 
-def load_recommendations(config: dict, limit: int = 12) -> dict:
+def load_recommendations(
+    config: dict,
+    limit: int = 12,
+    *,
+    user_id: int | None = None,
+) -> dict:
     """Return explainable, locally computed research candidates."""
-    data = _research_candidates(config)
+    data = _research_candidates(config, user_id)
     data["candidates"] = data["candidates"][:limit]
     data["model"] = "V2 技术评分 + 趋势/风险过滤"
     return data
@@ -753,6 +766,7 @@ def load_recommendations(config: dict, limit: int = 12) -> dict:
 def load_screener(
     config: dict,
     *,
+    user_id: int | None = None,
     min_score: int = 50,
     min_momentum: float = -100,
     max_volatility: float = 100,
@@ -760,7 +774,7 @@ def load_screener(
     limit: int = 20,
 ) -> dict:
     """Filter the aligned local research universe with reproducible criteria."""
-    data = _research_candidates(config)
+    data = _research_candidates(config, user_id)
     matches = [
         row
         for row in data["candidates"]

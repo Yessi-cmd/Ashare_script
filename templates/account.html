@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="page-header account-header">
+  <div><p class="eyebrow">YOUR DATA</p><h1>我的数据</h1><p>只属于 {{ request.state.web_user.username }} 的持仓、关注池与研究标记。</p></div>
+</section>
+
+{% if notice %}<div class="paper-notice {{ notice.tone }}" role="status">{{ notice.text }}</div>{% endif %}
+{% if legacy_yaml %}
+<div class="research-notice"><strong>遗留配置模式</strong><span>当前账号仍在读取旧的 YAML 股票池。新注册的网页账号可以直接在这里维护自己的数据。</span></div>
+{% else %}
+<div class="account-grid">
+  <section class="panel">
+    <div class="section-title"><div><h2>保存持仓</h2><p>同一股票再次保存会更新记录。</p></div></div>
+    <form method="post" action="/account/portfolio" class="account-form">
+      <input type="hidden" name="csrf_token" value="{{ data.csrf_token }}">
+      <label>股票代码<input name="stock_code" inputmode="numeric" pattern="[0-9]{1,6}" maxlength="6" placeholder="600519" required></label>
+      <label>名称<input name="name" maxlength="50" placeholder="可留空自动读取"></label>
+      <label>买入价<input name="buy_price" type="number" min="0.01" step="0.001" placeholder="1500" required></label>
+      <label>股数<input name="shares" type="number" min="1" step="1" placeholder="100" required></label>
+      <label>止损 %<input name="stop_loss" type="number" max="-0.01" step="0.1" value="-5" required></label>
+      <label>止盈 %<input name="take_profit" type="number" min="0.01" step="0.1" value="10" required></label>
+      <button class="primary-button" type="submit">保存持仓</button>
+    </form>
+  </section>
+
+  <section class="panel">
+    <div class="section-title"><div><h2>加入关注池</h2><p>用于个人研究标记和行情采集。</p></div></div>
+    <form method="post" action="/account/watchlist" class="account-form account-watch-form">
+      <input type="hidden" name="csrf_token" value="{{ data.csrf_token }}">
+      <label>股票代码<input name="stock_code" inputmode="numeric" pattern="[0-9]{1,6}" maxlength="6" placeholder="300750" required></label>
+      <label>名称<input name="name" maxlength="50" placeholder="可留空自动读取"></label>
+      <button class="primary-button" type="submit">加入关注</button>
+    </form>
+  </section>
+</div>
+
+<section class="panel">
+  <div class="section-title"><div><h2>我的持仓</h2><p>只显示当前账号的数据。</p></div><span>{{ data.portfolio|length }} 只</span></div>
+  <div class="table-wrap"><table class="account-table">
+    <thead><tr><th>股票</th><th>买入价</th><th>股数</th><th>止损 / 止盈</th><th>操作</th></tr></thead>
+    <tbody>{% for row in data.portfolio %}
+      <tr><td><strong>{{ row.name }}</strong><small>{{ row.code }}</small></td><td>¥{{ '%.3f'|format(row.buy_price) }}</td><td>{{ row.shares }}</td><td>{{ '%+.1f'|format(row.stop_loss) }}% / {{ '%+.1f'|format(row.take_profit) }}%</td><td><form method="post" action="/account/portfolio/{{ row.code }}/delete" data-confirm="确认删除"><input type="hidden" name="csrf_token" value="{{ data.csrf_token }}"><button class="text-button" type="submit">删除</button></form></td></tr>
+    {% else %}<tr><td colspan="5" class="empty">暂无个人持仓</td></tr>{% endfor %}</tbody>
+  </table></div>
+</section>
+
+<section class="panel">
+  <div class="section-title"><div><h2>我的关注池</h2><p>个人标记不会与其他账号混用。</p></div><span>{{ data.watchlist|length }} 只</span></div>
+  <div class="table-wrap"><table class="account-table">
+    <thead><tr><th>股票</th><th>操作</th></tr></thead>
+    <tbody>{% for row in data.watchlist %}
+      <tr><td><a href="/stocks/{{ row.code }}"><strong>{{ row.name }}</strong><small>{{ row.code }}</small></a></td><td><form method="post" action="/account/watchlist/{{ row.code }}/delete" data-confirm="确认移除"><input type="hidden" name="csrf_token" value="{{ data.csrf_token }}"><button class="text-button" type="submit">移除</button></form></td></tr>
+    {% else %}<tr><td colspan="2" class="empty">暂无个人关注股票</td></tr>{% endfor %}</tbody>
+  </table></div>
+</section>
+{% endif %}
+{% endblock %}

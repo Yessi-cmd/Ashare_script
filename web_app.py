@@ -5,12 +5,9 @@ from __future__ import annotations
 
 import logging
 import os
-import base64
-import hashlib
-import hmac
-import json
 import secrets
 import time
+from math import isfinite
 from pathlib import Path
 from typing import Optional
 from urllib.parse import parse_qs, quote
@@ -32,16 +29,26 @@ from dashboard_data import (
     load_system_status,
 )
 from backtest_bt import run_backtest_web
-from database import QuoteSnapshot, get_db, init_db
+from database import Portfolio, QuoteSnapshot, User, Watchlist, get_db, init_db
 from market_data import load_daily_bars, normalize_stock_code
 from paper_trading import (
     PaperTradingError,
     cancel_paper_order,
     load_paper_dashboard,
-    paper_owner_user_id,
     submit_paper_order,
 )
 from settings import ConfigError, load_config
+from settings import get_owner_user_id
+from web_auth import (
+    WebAuthError,
+    WebPrincipal,
+    authenticate_web_user,
+    load_web_principal,
+    make_signed_token,
+    read_signed_token,
+    register_web_user,
+    registration_code_configured,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -71,61 +78,83 @@ PAPER_RESULT_MESSAGES = {
     "request-failed": ("error", "模拟盘操作失败，请稍后重试。"),
 }
 
+ACCOUNT_RESULT_MESSAGES = {
+    "portfolio-saved": ("ok", "持仓已保存。"),
+    "portfolio-deleted": ("ok", "持仓已删除。"),
+    "watchlist-saved": ("ok", "关注股票已保存。"),
+    "watchlist-deleted": ("ok", "关注股票已删除。"),
+    "invalid-data": ("error", "股票代码、价格、股数或风险参数无效。"),
+    "legacy-yaml": ("error", "当前遗留 YAML 账号不支持网页编辑，请先切换到数据库用户。"),
+    "request-failed": ("error", "个人数据操作失败，请稍后重试。"),
+}
 
-def _auth_settings() -> tuple[str, str, str]:
-    username = os.getenv("ASHARE_WEB_USERNAME", "")
-    password = os.getenv("ASHARE_WEB_PASSWORD", "")
+
+def _auth_settings() -> str:
     session_secret = os.getenv("ASHARE_WEB_SESSION_SECRET", "")
-    if not username or not password or not session_secret:
+    if not session_secret:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Web 认证尚未完整配置",
         )
-    return username, password, session_secret
+    return session_secret
 
 
-def _make_session_token(username: str, session_secret: str, expires_at: int) -> str:
-    payload = json.dumps(
-        {"sub": username, "exp": expires_at},
-        ensure_ascii=False,
-        separators=(",", ":"),
-    ).encode("utf-8")
-    encoded = base64.urlsafe_b64encode(payload).decode("ascii").rstrip("=")
-    signature = hmac.new(
-        session_secret.encode("utf-8"), encoded.encode("ascii"), hashlib.sha256
-    ).hexdigest()
-    return f"{encoded}.{signature}"
+def _make_session_token(
+    username: str,
+    session_secret: str,
+    expires_at: int,
+    user_id: int = 0,
+) -> str:
+    """Compatibility wrapper retained for the existing offline tests."""
+    return make_signed_token(
+        user_id, username, session_secret, expires_at, purpose="session"
+    )
 
 
-def _read_session_token(token: str, username: str, session_secret: str) -> bool:
-    try:
-        encoded, signature = token.rsplit(".", 1)
-        expected = hmac.new(
-            session_secret.encode("utf-8"), encoded.encode("ascii"), hashlib.sha256
-        ).hexdigest()
-        if not secrets.compare_digest(signature, expected):
-            return False
-        padding = "=" * (-len(encoded) % 4)
-        payload = json.loads(base64.urlsafe_b64decode(encoded + padding))
-        return (
-            payload.get("sub") == username
-            and int(payload.get("exp", 0)) >= int(time.time())
-        )
-    except (ValueError, TypeError, json.JSONDecodeError):
-        return False
+def _read_session_token(
+    token: str,
+    username: str,
+    session_secret: str,
+    user_id: int | None = None,
+) -> bool:
+    payload = read_signed_token(token, session_secret, purpose="session")
+    return bool(
+        payload
+        and payload.get("username") == username
+        and (user_id is None or payload.get("user_id") == user_id)
+    )
 
 
-def _make_csrf_token(username: str, session_secret: str, expires_at: int) -> str:
-    return _make_session_token(f"paper:{username}", session_secret, expires_at)
+def _make_csrf_token(
+    username: str,
+    session_secret: str,
+    expires_at: int,
+    user_id: int = 0,
+) -> str:
+    return make_signed_token(
+        user_id, username, session_secret, expires_at, purpose="csrf"
+    )
 
 
-def _valid_csrf_token(token: str, username: str, session_secret: str) -> bool:
-    return _read_session_token(token, f"paper:{username}", session_secret)
+def _valid_csrf_token(
+    token: str,
+    username: str,
+    session_secret: str,
+    user_id: int,
+) -> bool:
+    payload = read_signed_token(token, session_secret, purpose="csrf")
+    return bool(
+        payload
+        and payload.get("username") == username
+        and payload.get("user_id") == user_id
+    )
 
 
-def _require_csrf(token: str, username: str) -> None:
-    _auth_username, _password, session_secret = _auth_settings()
-    if not _valid_csrf_token(token, username, session_secret):
+def _require_csrf(token: str, principal: WebPrincipal) -> None:
+    session_secret = _auth_settings()
+    if not _valid_csrf_token(
+        token, principal.username, session_secret, principal.user_id
+    ):
         raise HTTPException(status_code=403, detail="表单校验失败")
 
 
@@ -150,13 +179,22 @@ def _safe_next_path(value: str | None) -> str:
 def require_auth(
     request: Request,
     credentials: HTTPBasicCredentials = Depends(security),
-) -> str:
-    username, password, session_secret = _auth_settings()
+) -> WebPrincipal:
+    session_secret = _auth_settings()
     session_token = request.cookies.get(SESSION_COOKIE_NAME, "")
-    if session_token and _read_session_token(session_token, username, session_secret):
-        return username
-    if _valid_basic_auth(credentials, username, password):
-        return username
+    payload = read_signed_token(session_token, session_secret, purpose="session")
+    if payload:
+        principal = load_web_principal(
+            payload["user_id"], payload["username"]
+        )
+        if principal is not None:
+            request.state.web_user = principal
+            return principal
+    if credentials is not None:
+        principal = authenticate_web_user(credentials.username, credentials.password)
+        if principal is not None:
+            request.state.web_user = principal
+            return principal
 
     if request.url.path.startswith("/api/"):
         raise HTTPException(
@@ -171,6 +209,55 @@ def require_auth(
         status_code=status.HTTP_303_SEE_OTHER,
         headers={"Location": f"/login?next={quote(next_path, safe='')}"},
     )
+
+
+def _personal_user_id(config: dict, principal: WebPrincipal) -> int | None:
+    """Resolve the data owner while keeping the old YAML mode intact."""
+    if not principal.legacy_env:
+        return principal.user_id
+    return get_owner_user_id(config)
+
+
+def _paper_user_id(config: dict, principal: WebPrincipal) -> int:
+    """Resolve the paper ledger owner for both new and legacy accounts."""
+    if not principal.legacy_env:
+        return principal.user_id
+    return get_owner_user_id(config) or 0
+
+
+def _account_user_id(config: dict, principal: WebPrincipal) -> int:
+    user_id = _personal_user_id(config, principal)
+    if user_id is None:
+        raise HTTPException(status_code=400, detail="遗留 YAML 账号不支持网页编辑")
+    return user_id
+
+
+def _load_account_data(user_id: int) -> dict:
+    init_db()
+    db = get_db()
+    try:
+        portfolio = [
+            {
+                "code": row.stock_code,
+                "name": row.name,
+                "buy_price": row.buy_price,
+                "shares": row.shares,
+                "stop_loss": row.stop_loss,
+                "take_profit": row.take_profit,
+            }
+            for row in db.query(Portfolio).filter(
+                Portfolio.user_id == user_id
+            ).order_by(Portfolio.stock_code).all()
+        ]
+        watchlist = [
+            {"code": row.stock_code, "name": row.name}
+            for row in db.query(Watchlist).filter(
+                Watchlist.user_id == user_id
+            ).order_by(Watchlist.stock_code).all()
+        ]
+        return {"portfolio": portfolio, "watchlist": watchlist}
+    finally:
+        db.close()
 
 
 def _config() -> dict:
@@ -201,36 +288,49 @@ def healthz() -> dict:
 
 
 @app.get("/login", response_class=HTMLResponse)
-def login_page(request: Request, next: str = Query(default="/")):
-    username, _password, session_secret = _auth_settings()
+def login_page(
+    request: Request,
+    next: str = Query(default="/"),
+    registered: int = Query(default=0, ge=0, le=1),
+):
+    session_secret = _auth_settings()
     token = request.cookies.get(SESSION_COOKIE_NAME, "")
-    if token and _read_session_token(token, username, session_secret):
+    payload = read_signed_token(token, session_secret, purpose="session")
+    if payload and load_web_principal(payload["user_id"], payload["username"]):
         return RedirectResponse(_safe_next_path(next), status_code=303)
     return templates.TemplateResponse(
         request=request,
         name="login.html",
-        context={"title": "登录", "next_path": _safe_next_path(next), "error": None},
+        context={
+            "title": "登录",
+            "next_path": _safe_next_path(next),
+            "error": None,
+            "notice": "账号创建成功，请登录。" if registered else None,
+            "registration_available": registration_code_configured(),
+        },
     )
 
 
 @app.post("/login", response_class=HTMLResponse)
 async def login_submit(request: Request):
-    username, password, session_secret = _auth_settings()
+    session_secret = _auth_settings()
     form = parse_qs((await request.body()).decode("utf-8", errors="replace"))
     submitted_username = form.get("username", [""])[0]
     submitted_password = form.get("password", [""])[0]
     next_path = _safe_next_path(form.get("next", ["/"])[0])
     remember = form.get("remember", [""])[0] == "yes"
-    valid = secrets.compare_digest(
-        submitted_username.encode("utf-8"), username.encode("utf-8")
-    ) and secrets.compare_digest(
-        submitted_password.encode("utf-8"), password.encode("utf-8")
-    )
-    if not valid:
+    principal = authenticate_web_user(submitted_username, submitted_password)
+    if principal is None:
         return templates.TemplateResponse(
             request=request,
             name="login.html",
-            context={"title": "登录", "next_path": next_path, "error": "用户名或密码不正确"},
+            context={
+                "title": "登录",
+                "next_path": next_path,
+                "error": "用户名或密码不正确",
+                "notice": None,
+                "registration_available": registration_code_configured(),
+            },
             status_code=401,
         )
 
@@ -238,7 +338,12 @@ async def login_submit(request: Request):
     response = RedirectResponse(next_path, status_code=303)
     response.set_cookie(
         SESSION_COOKIE_NAME,
-        _make_session_token(username, session_secret, int(time.time()) + ttl),
+        _make_session_token(
+            principal.username,
+            session_secret,
+            int(time.time()) + ttl,
+            principal.user_id,
+        ),
         max_age=ttl if remember else None,
         httponly=True,
         secure=request.url.scheme == "https"
@@ -249,6 +354,50 @@ async def login_submit(request: Request):
     return response
 
 
+@app.get("/register", response_class=HTMLResponse)
+def register_page(request: Request):
+    _auth_settings()
+    return templates.TemplateResponse(
+        request=request,
+        name="register.html",
+        context={
+            "title": "注册",
+            "error": None,
+            "registration_available": registration_code_configured(),
+        },
+    )
+
+
+@app.post("/register", response_class=HTMLResponse)
+async def register_submit(request: Request):
+    _auth_settings()
+    form = parse_qs((await request.body()).decode("utf-8", errors="replace"))
+    username = form.get("username", [""])[0]
+    password = form.get("password", [""])[0]
+    password_confirm = form.get("password_confirm", [""])[0]
+    registration_code = form.get("registration_code", [""])[0]
+    if password != password_confirm:
+        error = "两次输入的密码不一致"
+    else:
+        try:
+            register_web_user(username, password, registration_code)
+        except WebAuthError as exc:
+            error = str(exc)
+        else:
+            return RedirectResponse("/login?registered=1", status_code=303)
+    return templates.TemplateResponse(
+        request=request,
+        name="register.html",
+        context={
+            "title": "注册",
+            "error": error,
+            "registration_available": registration_code_configured(),
+            "username": username,
+        },
+        status_code=400,
+    )
+
+
 @app.post("/logout")
 def logout():
     response = RedirectResponse("/login", status_code=303)
@@ -256,11 +405,236 @@ def logout():
     return response
 
 
-@app.get("/", response_class=HTMLResponse)
-def overview(request: Request, _username: str = Depends(require_auth)):
+def _account_context(
+    request: Request,
+    config: dict,
+    principal: WebPrincipal,
+    result: Optional[str] = None,
+) -> dict:
+    user_id = _personal_user_id(config, principal)
+    data = (
+        _load_account_data(user_id)
+        if user_id is not None
+        else {"portfolio": [], "watchlist": []}
+    )
+    session_secret = _auth_settings()
+    data["csrf_token"] = _make_csrf_token(
+        principal.username,
+        session_secret,
+        int(time.time()) + CSRF_TTL_SECONDS,
+        principal.user_id,
+    )
+    notice_data = ACCOUNT_RESULT_MESSAGES.get(result)
+    return {
+        "data": data,
+        "notice": (
+            {"tone": notice_data[0], "text": notice_data[1]}
+            if notice_data
+            else None
+        ),
+        "legacy_yaml": user_id is None,
+    }
+
+
+@app.get("/account", response_class=HTMLResponse)
+def account_page(
+    request: Request,
+    result: Optional[str] = Query(default=None),
+    current_user: WebPrincipal = Depends(require_auth),
+):
     config = _config()
-    data = load_overview(config)
-    data["recommendations"] = load_recommendations(config, limit=4)
+    context = _account_context(request, config, current_user, result)
+    return templates.TemplateResponse(
+        request=request,
+        name="account.html",
+        context={**context, "title": "我的数据"},
+    )
+
+
+def _account_stock_name(db, code: str, submitted_name: str) -> str:
+    name = str(submitted_name or "").strip()
+    if name:
+        return name[:50]
+    snapshot = db.get(QuoteSnapshot, code)
+    return (snapshot.name if snapshot is not None else code)[:50]
+
+
+@app.post("/account/portfolio")
+async def account_portfolio_submit(
+    request: Request,
+    current_user: WebPrincipal = Depends(require_auth),
+):
+    form = parse_qs((await request.body()).decode("utf-8", errors="replace"))
+    _require_csrf(form.get("csrf_token", [""])[0], current_user)
+    try:
+        config = _config()
+        user_id = _account_user_id(config, current_user)
+        code = normalize_stock_code(form.get("stock_code", [""])[0])
+        name = form.get("name", [""])[0]
+        buy_price = float(form.get("buy_price", [""])[0])
+        shares = int(form.get("shares", [""])[0])
+        stop_loss = float(form.get("stop_loss", ["-5"])[0])
+        take_profit = float(form.get("take_profit", ["10"])[0])
+        if (
+            not all(isfinite(value) for value in (buy_price, stop_loss, take_profit))
+            or buy_price <= 0
+            or shares <= 0
+            or stop_loss >= 0
+            or take_profit <= 0
+        ):
+            raise ValueError("invalid portfolio values")
+        init_db()
+        db = get_db()
+        try:
+            if db.get(User, user_id) is None:
+                raise ValueError("user missing")
+            row = db.query(Portfolio).filter(
+                Portfolio.user_id == user_id,
+                Portfolio.stock_code == code,
+            ).first()
+            if row is None:
+                row = Portfolio(user_id=user_id, stock_code=code)
+                db.add(row)
+            row.name = _account_stock_name(db, code, name)
+            row.buy_price = buy_price
+            row.shares = shares
+            row.stop_loss = stop_loss
+            row.take_profit = take_profit
+            db.commit()
+        finally:
+            db.close()
+        result = "portfolio-saved"
+    except HTTPException:
+        raise
+    except (ValueError, TypeError):
+        result = "invalid-data"
+    except Exception as exc:
+        logger.error(f"保存网页用户持仓失败: {exc}")
+        result = "request-failed"
+    return RedirectResponse(f"/account?result={result}", status_code=303)
+
+
+@app.post("/account/portfolio/{stock_code}/delete")
+async def account_portfolio_delete(
+    request: Request,
+    stock_code: str,
+    current_user: WebPrincipal = Depends(require_auth),
+):
+    form = parse_qs((await request.body()).decode("utf-8", errors="replace"))
+    _require_csrf(form.get("csrf_token", [""])[0], current_user)
+    try:
+        config = _config()
+        user_id = _account_user_id(config, current_user)
+        code = normalize_stock_code(stock_code)
+        init_db()
+        db = get_db()
+        try:
+            row = db.query(Portfolio).filter(
+                Portfolio.user_id == user_id,
+                Portfolio.stock_code == code,
+            ).first()
+            if row is not None:
+                db.delete(row)
+                db.commit()
+        finally:
+            db.close()
+        result = "portfolio-deleted"
+    except HTTPException:
+        raise
+    except (ValueError, TypeError):
+        result = "invalid-data"
+    except Exception as exc:
+        logger.error(f"删除网页用户持仓失败: {exc}")
+        result = "request-failed"
+    return RedirectResponse(f"/account?result={result}", status_code=303)
+
+
+@app.post("/account/watchlist")
+async def account_watchlist_submit(
+    request: Request,
+    current_user: WebPrincipal = Depends(require_auth),
+):
+    form = parse_qs((await request.body()).decode("utf-8", errors="replace"))
+    _require_csrf(form.get("csrf_token", [""])[0], current_user)
+    try:
+        config = _config()
+        user_id = _account_user_id(config, current_user)
+        code = normalize_stock_code(form.get("stock_code", [""])[0])
+        init_db()
+        db = get_db()
+        try:
+            if db.get(User, user_id) is None:
+                raise ValueError("user missing")
+            row = db.query(Watchlist).filter(
+                Watchlist.user_id == user_id,
+                Watchlist.stock_code == code,
+            ).first()
+            if row is None:
+                row = Watchlist(user_id=user_id, stock_code=code)
+                db.add(row)
+            row.name = _account_stock_name(
+                db, code, form.get("name", [""])[0]
+            )
+            db.commit()
+        finally:
+            db.close()
+        result = "watchlist-saved"
+    except HTTPException:
+        raise
+    except (ValueError, TypeError):
+        result = "invalid-data"
+    except Exception as exc:
+        logger.error(f"保存网页用户关注股票失败: {exc}")
+        result = "request-failed"
+    return RedirectResponse(f"/account?result={result}", status_code=303)
+
+
+@app.post("/account/watchlist/{stock_code}/delete")
+async def account_watchlist_delete(
+    request: Request,
+    stock_code: str,
+    current_user: WebPrincipal = Depends(require_auth),
+):
+    form = parse_qs((await request.body()).decode("utf-8", errors="replace"))
+    _require_csrf(form.get("csrf_token", [""])[0], current_user)
+    try:
+        config = _config()
+        user_id = _account_user_id(config, current_user)
+        code = normalize_stock_code(stock_code)
+        init_db()
+        db = get_db()
+        try:
+            row = db.query(Watchlist).filter(
+                Watchlist.user_id == user_id,
+                Watchlist.stock_code == code,
+            ).first()
+            if row is not None:
+                db.delete(row)
+                db.commit()
+        finally:
+            db.close()
+        result = "watchlist-deleted"
+    except HTTPException:
+        raise
+    except (ValueError, TypeError):
+        result = "invalid-data"
+    except Exception as exc:
+        logger.error(f"删除网页用户关注股票失败: {exc}")
+        result = "request-failed"
+    return RedirectResponse(f"/account?result={result}", status_code=303)
+
+
+@app.get("/", response_class=HTMLResponse)
+def overview(
+    request: Request,
+    current_user: WebPrincipal = Depends(require_auth),
+):
+    config = _config()
+    user_id = _personal_user_id(config, current_user)
+    data = load_overview(config, user_id=user_id)
+    data["recommendations"] = load_recommendations(
+        config, user_id=user_id, limit=4
+    )
     return templates.TemplateResponse(
         request=request,
         name="overview.html",
@@ -269,8 +643,16 @@ def overview(request: Request, _username: str = Depends(require_auth)):
 
 
 @app.get("/recommendations", response_class=HTMLResponse)
-def recommendations_page(request: Request, _username: str = Depends(require_auth)):
-    data = load_recommendations(_config(), limit=12)
+def recommendations_page(
+    request: Request,
+    current_user: WebPrincipal = Depends(require_auth),
+):
+    config = _config()
+    data = load_recommendations(
+        config,
+        user_id=_personal_user_id(config, current_user),
+        limit=12,
+    )
     return templates.TemplateResponse(
         request=request,
         name="recommendations.html",
@@ -279,7 +661,10 @@ def recommendations_page(request: Request, _username: str = Depends(require_auth
 
 
 @app.get("/markets", response_class=HTMLResponse)
-def markets_page(request: Request, _username: str = Depends(require_auth)):
+def markets_page(
+    request: Request,
+    _current_user: WebPrincipal = Depends(require_auth),
+):
     data = load_market_overview(_config())
     return templates.TemplateResponse(
         request=request,
@@ -296,10 +681,12 @@ def screener_page(
     max_volatility: float = Query(default=100, ge=0, le=300),
     above_ma20: bool = Query(default=False),
     limit: int = Query(default=20, ge=1, le=50),
-    _username: str = Depends(require_auth),
+    current_user: WebPrincipal = Depends(require_auth),
 ):
+    config = _config()
     data = load_screener(
-        _config(),
+        config,
+        user_id=_personal_user_id(config, current_user),
         min_score=min_score,
         min_momentum=min_momentum,
         max_volatility=max_volatility,
@@ -338,7 +725,7 @@ def strategy_page(
     start: str = Query(default=""),
     end: str = Query(default=""),
     cash: float = Query(default=100_000.0, ge=10_000, le=10_000_000),
-    _username: str = Depends(require_auth),
+    _current_user: WebPrincipal = Depends(require_auth),
 ):
     context: dict = {
         "title": "策略回测",
@@ -414,13 +801,18 @@ def strategy_page(
 def paper_page(
     request: Request,
     result: Optional[str] = Query(default=None),
-    username: str = Depends(require_auth),
+    current_user: WebPrincipal = Depends(require_auth),
 ):
     config = _config()
-    data = load_paper_dashboard(config)
-    _auth_username, _password, session_secret = _auth_settings()
+    data = load_paper_dashboard(
+        config, user_id=_personal_user_id(config, current_user)
+    )
+    session_secret = _auth_settings()
     csrf_token = _make_csrf_token(
-        username, session_secret, int(time.time()) + CSRF_TTL_SECONDS
+        current_user.username,
+        session_secret,
+        int(time.time()) + CSRF_TTL_SECONDS,
+        current_user.user_id,
     )
     data["csrf_token"] = csrf_token
     data["buy_client_order_id"] = secrets.token_urlsafe(18)
@@ -438,14 +830,14 @@ def paper_page(
 @app.post("/paper/orders")
 async def paper_order_submit(
     request: Request,
-    username: str = Depends(require_auth),
+    current_user: WebPrincipal = Depends(require_auth),
 ):
     form = parse_qs((await request.body()).decode("utf-8", errors="replace"))
-    _require_csrf(form.get("csrf_token", [""])[0], username)
+    _require_csrf(form.get("csrf_token", [""])[0], current_user)
     config = _config()
     try:
         submit_paper_order(
-            paper_owner_user_id(config),
+            _paper_user_id(config, current_user),
             form.get("side", [""])[0],
             form.get("stock_code", [""])[0],
             form.get("quantity", [""])[0],
@@ -464,12 +856,13 @@ async def paper_order_submit(
 async def paper_order_cancel(
     request: Request,
     order_id: int,
-    username: str = Depends(require_auth),
+    current_user: WebPrincipal = Depends(require_auth),
 ):
     form = parse_qs((await request.body()).decode("utf-8", errors="replace"))
-    _require_csrf(form.get("csrf_token", [""])[0], username)
+    _require_csrf(form.get("csrf_token", [""])[0], current_user)
     try:
-        cancel_paper_order(paper_owner_user_id(_config()), order_id)
+        config = _config()
+        cancel_paper_order(_paper_user_id(config, current_user), order_id)
         result = "order-cancelled"
     except PaperTradingError as exc:
         result = exc.code if exc.code in PAPER_RESULT_MESSAGES else "request-failed"
@@ -483,7 +876,7 @@ async def paper_order_cancel(
 def stock_detail(
     request: Request,
     stock_code: str,
-    _username: str = Depends(require_auth),
+    _current_user: WebPrincipal = Depends(require_auth),
 ):
     try:
         code = normalize_stock_code(stock_code)
@@ -500,7 +893,7 @@ def stock_detail(
 def stock_bars(
     stock_code: str,
     limit: int = Query(default=180, ge=20, le=500),
-    _username: str = Depends(require_auth),
+    _current_user: WebPrincipal = Depends(require_auth),
 ) -> dict:
     try:
         code = normalize_stock_code(stock_code)
@@ -524,7 +917,10 @@ def stock_bars(
 
 
 @app.get("/system", response_class=HTMLResponse)
-def system_page(request: Request, _username: str = Depends(require_auth)):
+def system_page(
+    request: Request,
+    _current_user: WebPrincipal = Depends(require_auth),
+):
     return templates.TemplateResponse(
         request=request,
         name="system.html",
